@@ -1,0 +1,830 @@
+---
+title: "Capstone Project"
+author: "Sarah Wigodsky"
+date: "February 18, 2019"
+output: html_document
+---
+
+Load libraries
+```{r libraries, echo=FALSE, warning=FALSE, message=FALSE}
+library(dplyr)
+library(tidyr)
+library(corrplot)
+```
+
+Load data to map cities to counties
+https://simplemaps.com/data/us-cities
+```{r cityToCounty, echo=FALSE}
+city_county <- read.csv("C:/Users/Swigo/Desktop/Sarah/DATA698/uscities_counties.csv", stringsAsFactors = FALSE)
+city_county <- city_county[,c(1,3,4,6)]
+city_county$state_name <- tolower(city_county$state_name)
+head(city_county)
+```
+
+Load Data from the Registry of Exonerations
+The listed crimes were committed between 1955 and 2017.
+The convictions occurred between 1956 and 2017.
+The exonerations occurred between 1989 and 2019.
+```{r load_exonerations_data, echo=FALSE}
+exonerations <- readxl::read_excel("C:/Users/Swigo/Desktop/Sarah/DATA698/exoneration_registry.xlsx")
+head(exonerations)
+```
+Number of convicted people who were later exonerated in each year for each county and state.
+The county listed for federal crimes is the district in the state where the trial took place (ie - Eastern district of NY.  I imputed the county location for the courthouse as the county in those cases.) I made the changes in the original spreadsheet
+```{r exon_clean, echo=FALSE}
+exon_df <- exonerations[,c("Occurred","County","State")]
+exon_df$sum <- 1
+exon_df$County[exon_df$County=='BaitimoreCity'] <- 'Baltimore'
+exon_df$County[exon_df$County=='Baltimore City'] <- 'Baltimore'
+exon_df$County[exon_df$County=='Mecklenburg'] <- 'Charlotte'
+exon_df$County[exon_df$County=='Miami-Dade'] <- 'Miami'
+exon_df$County[exon_df$County=='St. Louis City'] <- 'St. Louis'
+exon_df <- exon_df %>%
+  group_by(Occurred, County) %>%
+  mutate(num_convicted=sum(sum)) %>%
+  unique()
+exon_df$Occurred <- as.integer(exon_df$Occurred)
+#Get 2 letter state ID so that data can be compared to crime and police killing data
+exon_df$State <- tolower(exon_df$State)
+colnames(exon_df)[3] <- "state_name"
+exon_df <- exon_df %>%
+  left_join(city_county, by="state_name")
+#remove (city) from after name of some counties
+exon_df$County <- gsub(" \\(city\\)","", exon_df$County)
+
+
+exon_df <- exon_df [,c("Occurred","County","num_convicted","state_id")]
+#sort(unique(exon_df$County))
+exon_df <- unique(exon_df)
+exon_df$county_state <- paste(exon_df$County,exon_df$state_id)
+exon_df <- arrange(exon_df,county_state,Occurred)
+exon_df
+```
+ changes above:
+  "Baitimore city" to Baltimore
+  "Baltimore City" to Baltimore
+  "Meckelnburg" to Charlotte (to match Vice data that combined them)
+  "Miami-Dade" to Miami
+  "St. Louis City" to St. Louis
+
+Manhattan's county is New York 
+
+Load crime date from 1999-2017
+```{r load_crime_data, echo=FALSE}
+
+crime_fxn <- function(year_set){
+  file_names <- paste0("C:/Users/Swigo/Desktop/Sarah/DATA698/",year_set,"crimecity.csv")
+  #crime_df <- sapply(file_names, read.csv, stringsAsFactors=FALSE)
+  #crimes <- list(crime_df)
+  return(file_names)
+}
+#crime_df <- crime_fxn(yr)
+for(num in 1999:2017){
+  filename <- crime_fxn(num)
+  crime_df <- read.csv(filename, stringsAsFactors = FALSE)
+  for (x in 1:nrow(crime_df)){
+    if (crime_df$State[x]=="") {
+      crime_df$State[x]=crime_df$State[x-1] 
+      }
+    crime_df = crime_df[,1:4]
+    crime_df$State <- tolower(crime_df$State)
+    crime_df$year = num
+  }
+ifelse (num==1999, crimes_yr <- crime_df, 
+ {crime_df <- crime_df[-1,]
+  crimes_yr <- bind_rows(crimes_yr, crime_df)})
+  
+  
+}
+
+head(crimes_yr)
+tail(crimes_yr)
+```
+
+Since the exonerations data is tallied by county and the crime data is tallied by city, they need to be made uniform to compare and draw conclusions.  The simple_maps data enables me to map cities to counties.
+```{r crime_city_to_county, echo=FALSE}
+#head(crimes_yr)
+crimes_yr_county <- crimes_yr
+colnames(crimes_yr_county)[1] <- "state_name"
+colnames(crimes_yr_county)[2] <- "city"
+crimes_yr_county <- crimes_yr_county %>%
+  left_join(city_county, by="city","state_name")
+crimes_yr_county <- filter(crimes_yr_county, state_name.x==state_name.y)
+
+#crime index, population and vilent crime fields are characters - converty to numeric variables
+#Some years have a field Crime.Index.Total.  Other years have a field Violent.Crime.  Those two fields are incorporated into a new column violent_crime
+crimes_yr_county$Crime.Index.total <- as.numeric(crimes_yr_county$Crime.Index.total)
+crimes_yr_county$Population <- gsub(",","", crimes_yr_county$Population)
+crimes_yr_county$Violent.crime <- as.numeric(crimes_yr_county$Violent.crime)
+crimes_yr_county$Population <- as.numeric(crimes_yr_county$Population)
+crimes_yr_county$violent_crime <- rowSums(crimes_yr_county[,c("Crime.Index.total", "Violent.crime")], na.rm=TRUE)
+
+#The violent crime needs to be totaled by county (originally it as totaled by city)
+#Population needs to be totaled by county (originally it was totaled by city)
+crimes_yr_county <- crimes_yr_county %>%
+  group_by(year, county_name, state_name.x) %>%
+  mutate(violent_crime_county=sum(violent_crime)) %>%
+  mutate(county_population=sum(Population))
+
+crimes_yr_county <- crimes_yr_county[,c("year","county_name","state_id","county_population","violent_crime_county")]
+
+#There are multiple rows for each county - 1 line present for each city in that county that is listed.  Duplicate rows need to be removed.
+crimes_yr_county <- unique(crimes_yr_county)
+crimes_yr_county <- arrange(crimes_yr_county,county_name, year)
+#create a new column county_state to make analysis easier since multiple states have counties of the same name
+crimes_yr_county$county_state <- paste(crimes_yr_county$county_name,crimes_yr_county$state_id)
+crimes_yr_county
+```
+
+
+
+
+```{r data-into-csv, echo=TRUE, warning=FALSE, message=FALSE}
+write.csv(crimes_yr_county,"crime_all_year.csv",row.names=FALSE,col.names=TRUE)
+```
+
+
+
+
+
+Load Data Relating to Police Shootings 
+
+The following data table lists median household income by city in each state.
+```{r median_income_data, echo=FALSE}
+med_income <- read.csv("C:/Users/Swigo/Desktop/Sarah/DATA698/MedianHouseholdIncome2015.csv", stringsAsFactors = FALSE)
+head(med_income)
+```
+
+
+The following data table shows the percentage of people over 25 that completed high school by city in each state.
+```{r complete_hs, echo=FALSE}
+complete_hs <- read.csv("C:/Users/Swigo/Desktop/Sarah/DATA698/PercentOver25CompletedHighSchool.csv", stringsAsFactors = FALSE)
+head(complete_hs)
+```
+
+The following data table shows the name, date, manner of death, weapon, age ,gender, race, city, state, signs of mental illness, whether the victim was fleeing and whether the police officer was wearing a body camera for police shootings.  The Kaggle data was collected from 2015 through July 2017.
+
+I will use data from the Washington Post which is from 2015 through 2019
+#info on data can be found https://github.com/washingtonpost/data-police-shootings
+#there is a data base of police killings but includes other types of death - starts in 2012
+###https://numeracy.co/public/wqzC522zdz.embed
+
+##police shootings in maine 1990-2012 https://www.pressherald.com/interactive/maine-police-deadly-force-lethal-database/
+#vice news list from 2010-2016 https://raw.githubusercontent.com/vicenews/shot-by-cops/master/incident_data.csv
+###VICE news https://news.vice.com/en_us/article/a3jjpa/nonfatal-police-shootings-data
+```{r police_killing_WashPost, echo=FALSE}
+#police_killing <- read.csv("C:/Users/Swigo/Desktop/Sarah/DATA698/PoliceKillingsUS.csv", stringsAsFactors = FALSE)
+W_Postpolice_killing <- read.csv("https://raw.githubusercontent.com/washingtonpost/data-police-shootings/master/fatal-police-shootings-data.csv", stringsAsFactors = FALSE)
+W_Postpolice_killing$date <- as.Date(W_Postpolice_killing$date)
+tail(W_Postpolice_killing)
+```
+Some of the dates are written in the wrong format so they aren't being recognized as dates.
+```{r wash_post_data, echo=FALSE}
+wash_post <- W_Postpolice_killing
+wash_post <- separate(wash_post,date,c("year","month","day"))
+wash_post <- wash_post[,c("year", "city", "state")]
+wash_post$sum=1
+wash_post$year <- as.integer(wash_post$year)
+wash_post <- wash_post %>%
+  group_by(year, city, state) %>%
+  mutate(num_killed=sum(sum)) %>%
+  unique()
+
+wash_post <- wash_post[,c("year","city","state","num_killed")]
+wash_post <- arrange(wash_post,city,state,year)
+wash_post
+```
+
+many more specific city options are here than are in the Vice Data
+
+Load data from Vice on Police Killings
+Only take data before 2015 and only take data for fatal encounters
+```{r police_killing_vice, echo=FALSE}
+police_killing_vice <- read.csv("https://raw.githubusercontent.com/vicenews/shot-by-cops/master/incident_data.csv", stringsAsFactors = FALSE)
+head(police_killing_vice)
+```
+
+
+The data from Vice News includes victims of police shootings.  The outcome of the shooting is described in the column titled Fatal.  The values are F (fatal), N (not fatal) and U (unknown).  In cases were multiple people were shot, there are multiple values listed in the Fatal field.  I wil be focusing on police shootings that resulted in death so I will only remove cases in which the person who was shot survived.  Because the data set does not list the names of the people involved, there is no way to ascertain the outcome for those listed as unknown.  The data from the Washington Post will be used for 2015-present so the data from Vice will be used for before 2015.
+
+```{r filter_data, echo=FALSE}
+police_killing_vice_sub <- police_killing_vice %>%
+  filter(year<2015) %>%
+  filter(grepl("F", Fatal, fixed=TRUE))
+head(police_killing_vice_sub)
+```
+
+Count Number of people killed by Year For Each City Listed
+```{r separate_vice, echo=FALSE}
+vice_sep <- police_killing_vice_sub[, c("year", "Fatal", "city")]
+max(nchar(vice_sep$Fatal))
+which(nchar(vice_sep$Fatal)==16)
+vice_sep$Fatal[794]
+vice_sep <- vice_sep %>%
+  separate(Fatal, c("person1", "person2", "person3", "person4", "person5", "person6"), sep=";")
+head(vice_sep)
+```
+
+The maximum number of people shot at one time by police in the data set is 6 so I separated out the field of fatal to determine how many people were shot.
+
+```{r count_vice, echo=FALSE}
+vice_count <- vice_sep
+vice_count$person1[vice_count$person1=="F"] <- 1
+vice_count$person2[vice_count$person2=="F"] <- 1
+vice_count$person3[vice_count$person3=="F"] <- 1
+vice_count$person4[vice_count$person4=="F"] <- 1
+vice_count$person5[vice_count$person5=="F"] <- 1
+vice_count$person6[vice_count$person6=="F"] <- 1
+
+vice_count$person1 <- as.integer(vice_count$person1)
+vice_count$person2 <- as.integer(vice_count$person2)
+vice_count$person3 <- as.integer(vice_count$person3)
+vice_count$person4 <- as.integer(vice_count$person4)
+vice_count$person5 <- as.integer(vice_count$person5)
+vice_count$person6 <- as.integer(vice_count$person6)
+ 
+vice_count$sum <- rowSums(vice_count[,2:7], na.rm=TRUE)
+
+vice_count <- vice_count[,c("year","city","sum")]
+head(vice_count)
+
+vice_count$city[vice_count$city=='BaltimoreCity'] <- 'Baltimore'
+vice_count$city[vice_count$city=='BaltimoreCounty'] <- 'Baltimore'
+vice_count$city[vice_count$city=='CharlotteMecklenburg'] <- 'Charlotte'
+vice_count$city[vice_count$city=='City of Miami'] <- 'Miami'
+vice_count$city[vice_count$city=='DekalbCounty'] <- 'DeKalb'
+vice_count$city[vice_count$city=='FairfaxCounty'] <- 'Fairfax'
+vice_count$city[vice_count$city=='LosAngeles'] <- 'Los Angeles'
+vice_count$city[vice_count$city=='LouisvilleMPD'] <- 'Louisville'
+vice_count$city[vice_count$city=='MiamiDade'] <- 'Miami'
+vice_count$city[vice_count$city=='NewOrleans'] <- 'New Orleans'
+vice_count$city[vice_count$city=='SanDiego'] <- 'San Diego'
+vice_count$city[vice_count$city=='SanJose'] <- 'San Jose'
+vice_count$city[vice_count$city=='St. Louis'] <- 'Saint Louis'
+vice_count$city[vice_count$city=='LasVegas'] <- 'Las Vegas'
+
+vice_count <- vice_count %>%
+  group_by(year, city) %>%
+  mutate(num_killed=sum(sum)) %>%
+  unique()
+
+city_year_count <- vice_count[,c("year","city","num_killed")]
+city_year_count <- unique(city_year_count)
+
+city_year_count
+```
+
+
+Changed:
+  'BaltimoreCity' to Baltimore
+  'BaltimoreCounty' to Baltimore
+  'CharlotteMecklenburg' to Charlotte
+  'City of Miami' to Miami
+  'DekalbCounty' to Dekalb
+  'FairfaxCounty' to Fairfax
+  'LosAngeles' to Los Angeles
+  'LouisvilleMPD' to Louisville
+  'MiamiDade' to Miami
+  'NewOrleans' to New Orleans
+  'SanDiego' to San Diego
+  'SanJose' to San Jose
+PrinceGeorgesCounty (it's in Maryland)  
+St. Louis
+
+
+exon_df lists the number of exonerations per year in which the crime occurred in each county. (from National Registry of Exonerations)
+wash_post lists the number of police shootings per city in which a person was killed between 2015-present (from Washington Post)
+city_year_count lists the number of police shootings per city in which a person was killed between 2010-2014 (frmo Vice News)
+
+Since the exonerations data is tallied by county and the police killing data is tallied by city, they need to be made uniform to compare and draw conclusions.  The simple_maps data enables me to map cities to counties.
+```{r wash_post_county, echo=FALSE}
+#head(exon_df)
+#head(wash_post)
+#head(city_year_count)
+#head(city_county)
+
+wash_post_county <- wash_post %>%
+  left_join(city_county, by="city","state")
+wash_post_county <- filter(wash_post_county, state==state_id)
+
+wash_post_county$county_name <- gsub(" \\(city\\)","", wash_post_county$county_name)
+
+wash_post_county <- wash_post_county[,c("year","county_name","state","num_killed")]
+wash_post_county <- wash_post_county %>%
+  group_by(year, county_name, state) %>%
+  mutate(num_killed_county=sum(num_killed)) 
+
+wash_post_county <- wash_post_county[,c("year","county_name","state","num_killed_county")]
+wash_post_county <- unique(wash_post_county)
+wash_post_county <- arrange(wash_post_county,county_name, year)
+wash_post_county
+```
+
+The Vice data set doesn't have any information about state, so I must add it.  If there are no values for a given year, I will impute zero killings for that county in that year.
+
+```{r vice_county, echo=FALSE}
+vice_county <- city_year_count
+city_year_count$state="NA"
+vice_county$state[vice_county$city=="Albuquerque"] <- "NM"
+vice_county$state[vice_county$city=="Atlanta"] <- "GA"
+vice_county$state[vice_county$city=="Austin"] <- "TX"
+vice_county$state[vice_county$city=="Baltimore"] <- "MD"
+vice_county$state[vice_county$city=="Boston"] <- "MA"
+vice_county$state[vice_county$city=="Charlotte"] <- "NC"
+vice_county$state[vice_county$city=="Chicago"] <- "IL"
+vice_county$state[vice_county$city=="Cincinnati"] <- "OH"
+vice_county$state[vice_county$city=="Cleveland"] <- "OH"
+vice_county$state[vice_county$city=="Columbus"] <- "OH"
+vice_county$state[vice_county$city=="Dallas"] <- "TX"
+vice_county$state[vice_county$city=="DeKalb"] <- "IL"
+vice_county$state[vice_county$city=="Denver"] <- "CO"
+vice_county$state[vice_county$city=="El Paso"] <- "TX"
+vice_county$state[vice_county$city=="Fairfax"] <- "VA"
+vice_county$state[vice_county$city=="Fort Worth"] <- "TX"
+vice_county$state[vice_county$city=="Honolulu"] <- "HI"
+vice_county$state[vice_county$city=="Houston"] <- "TX"
+vice_county$state[vice_county$city=="Indianapolis"] <- "IN"
+vice_county$state[vice_county$city=="Jacksonville"] <- "FL"
+vice_county$state[vice_county$city=="Kansas City"] <- "MO"
+vice_county$state[vice_county$city=="Las Vegas"] <- "NV"
+vice_county$state[vice_county$city=="Los Angeles"] <- "CA"
+vice_county$state[vice_county$city=="Louisville"] <- "KY"
+vice_county$state[vice_county$city=="Memphis"] <- "TN"
+vice_county$state[vice_county$city=="Miami"] <- "FL"
+vice_county$state[vice_county$city=="Milwaukee"] <- "WI"
+vice_county$state[vice_county$city=="Nashville"] <- "TN"
+vice_county$state[vice_county$city=="New Orleans"] <- "LA"
+vice_county$state[vice_county$city=="New York"] <- "NY"
+vice_county$state[vice_county$city=="Newark"] <- "NJ"
+vice_county$state[vice_county$city=="Philadelphia"] <- "PA"
+vice_county$state[vice_county$city=="Phoenix"] <- "AZ"
+vice_county$state[vice_county$city=="Portland"] <- "OR"
+vice_county$state[vice_county$city=="PrinceGeorgesCounty"] <- "MD"
+vice_county$state[vice_county$city=="San Antonio"] <- "TX"
+vice_county$state[vice_county$city=="San Diego"] <- "CA"
+vice_county$state[vice_county$city=="San Francisco"] <- "CA"
+vice_county$state[vice_county$city=="Saint Louis"] <- "MO"
+vice_county$state[vice_county$city=="San Jose"] <- "CA"
+vice_county$state[vice_county$city=="Seattle"] <- "WA"
+
+vice_county <- vice_county %>%
+  left_join(city_county, by="city")
+vice_county$county_name[vice_county$city=="PrinceGeorgesCounty"] <- "Prince Georges"
+vice_county <- filter(vice_county, state==state_id)
+
+vice_county$county_name <- gsub(" \\(city\\)","", vice_county$county_name)
+
+
+vice_county <- vice_county[,c("year","county_name","state_id","num_killed")]
+
+colnames(vice_county) <- c("year","county_name","state","num_killed_county")
+vice_county <- arrange(vice_county,county_name, year)
+vice_county
+#wash_post_county <- wash_post_county[,c("year","county_name","num_killed_county")]
+#wash_post_county <- unique(wash_post_county)
+#wash_post_county
+```
+
+
+Atlanta is Atlanta, GA
+Austin is Austin, TX
+Baltimore is Baltimore, MD
+Boston is Boston, MA,
+Charlotte is Charlotte, NC
+Cincinnati is Cincinatti, OH
+Miami is Miami, FL
+Cleveland is Cleveland, OH
+Columbus is Columbus, OH
+Dallas is Dallas, TX
+Denver is Denver, CO
+El Paso is El Paso, TX
+Fairfax is Fairfax, VA (I checked records from data set)
+Houston is Houston, TX
+Indianapolis is Indianapolis, IN
+Jacksonville is Jacksonville, FL (I checked records from data set)
+Kansas City --> MO but it isn't clear
+Los Angeles is Los Angeles, CA
+Louisville is Louisville, KY
+Memphis is Memphis, TN
+Miami is Miama, FL
+Nashville is Nashville, TN
+New York is New York, NY
+Newark is Newark, NJ
+Philadelphia is Philadelphia, PA
+Phoenix is Phoenix, AZ
+Portland is Portland, OR (I checked records from data set)
+PrinceGeorgesCounty is Prince George's County, MD (add all info)
+San Antonio is San Antonio, TX
+San Diego is San Diego, CA
+San Jose is San Jose, CA
+St. Louis is St. Louis, MO
+
+
+If there is a missing year from 2010 to 2014 in the Vice Date set, impute zero for the number of people killed.
+If there is a missing year from 2015-2019 in the Washington Post data set, impute zero for the number of people killed.
+```{r, add-missing-years,echo=TRUE, warning=FALSE}
+for (c_name in (unique(vice_county$county_name))){
+  x=0
+  for (i in seq(2010,2014,1)){  
+    
+  #  vice_county$year[vice_county$county_name=="Fairfax"][1]=="2010"
+    if  ((vice_county$year[vice_county$county_name==c_name][i-2009]!=i) | is.na((vice_county$year[vice_county$county_name==c_name][i-2009]!=i)))
+      
+      {
+     stateName <- (vice_county$state[vice_county$county_name==c_name])[1]
+     vice_county <- rbind(vice_county, list(i,c_name, stateName, 0))
+      x=x+1
+      vice_county <- arrange(vice_county,county_name, year)
+     }
+  }
+} 
+#wash_post_county
+#wash_post_county <- as.matrix(wash_post_county)
+
+wash_post_county$county_state <- paste(wash_post_county$county_name,wash_post_county$state)
+wash_post_county<- arrange(wash_post_county,county_state,year)
+for (statecounty in (unique(wash_post_county$county_state))){
+    cW_name <- unlist(strsplit(statecounty," "))[1]
+    stateName <- unlist(strsplit(statecounty," "))[2]
+  x=0
+  for (i in seq(2015,2019,1)){  
+   
+    if  ((wash_post_county$year[wash_post_county$county_state==statecounty][i-2014-x]!=i) | is.na((wash_post_county$year[wash_post_county$county_state==statecounty][i-2014-x]!=i)))
+      {
+    # stateName <- wash_post_county$state[(wash_post_county$county_name==cW_name)][1]
+     addlist <- data.frame(list(year=i,county_name=cW_name,state=stateName,num_killed_county=0))
+     wash_post_county <- wash_post_county %>%
+      bind_rows(addlist)
+       x=x+1
+     # wash_post_county <- arrange(wash_post_county,county_name, year)
+     }
+  }
+}
+
+vice_county
+wash_post_county <- arrange(wash_post_county,county_name, state, year)
+wash_post_county
+```
+
+{r}
+wash_post_county <- wash_post_county[,c("year","county_name","state","num_killed_county")]
+police_killed <- vice_county %>%
+  bind_rows(wash_post_county)
+police_killed <- arrange(police_killed, county_name, state, year)
+police_killed
+
+police_killed$county_state <- paste(police_killed$county_name,police_killed$state)
+police_killed<- arrange(police_killed,county_state,year)
+for (statecounty in (unique(police_killed$county_state))){
+    cW_name <- unlist(strsplit(statecounty," "))[1]
+    stateName <- unlist(strsplit(statecounty," "))[2]
+  x=0
+  for (i in seq(2010,2019,1)){  
+       if  ((police_killed$year[police_killed$county_state==statecounty][i-2009-x]!=i) | is.na((police_killed$year[police_killed$county_state==statecounty][i-2009 -x]!=i)))
+      {
+    # stateName <- wash_post_county$state[(wash_post_county$county_name==cW_name)][1]
+     addlist <- data.frame(list(year=i,county_name=cW_name,state=stateName,num_killed_county=0))
+     police_killed <- police_killed %>%
+      bind_rows(addlist)
+       x=x+1
+     # wash_post_county <- arrange(wash_post_county,county_name, year)
+     }
+  }
+}
+
+police_killed <-arrange(police_killed, stateName, year)
+
+
+{r}
+wash_post_county_df <- wash_post_county[,c("year","county_name","state","num_killed_county")]
+police_killed <- vice_county %>%
+  bind_rows(wash_post_county_df)
+police_killed <- arrange(police_killed, county_name, state, year)
+#police_killed
+
+police_killed$county_state <- paste(police_killed$county_name,police_killed$state)
+police_killed<- arrange(police_killed,county_state,year)
+police_killed
+
+new_df <- data.frame(list(year=0,county_name="blah",state="yuk",num_killed_county=0))
+for (statecounty in (unique(police_killed$county_state))){
+    cW_name <- unlist(strsplit(statecounty," "))[1]
+    stateName <- unlist(strsplit(statecounty," "))[2]
+  x=0
+  for (i in seq(2010,2019,1)){  
+   
+    if  ((police_killed$year[police_killed$county_state==statecounty][i-2009-x]!=i) | is.na((police_killed$year[police_killed$county_state==statecounty][i-2009-x]!=i)))
+      {
+   # print(i)
+    #  print(cW_name)
+    #  print(stateName)
+     addlist <- data.frame(list(year=i,county_name=cW_name,state=stateName,num_killed_county=0, county_state=statecounty))
+     new_df <- new_df %>%
+      bind_rows(addlist)
+       x=x+1
+     # wash_post_county <- arrange(wash_post_county,county_name, year)
+     }
+  }
+}
+
+
+
+```{r}
+wash_post_county_df <- wash_post_county[,c("year","county_name","state","num_killed_county")]
+police_killed <- vice_county %>%
+  bind_rows(wash_post_county_df)
+police_killed <- arrange(police_killed, county_name, state, year)
+#police_killed
+
+police_killed$county_state <- paste(police_killed$county_name,police_killed$state)
+police_killed<- arrange(police_killed,county_state,year)
+police_killed
+police_killed[1001:2000,]
+
+
+```
+
+rows 1:204 pk1
+205:429 pk2
+430:637 pk3
+638:849 pk4
+850:1052 pk5
+1053:1274 pk6
+1275:1495 pk7
+1496:1718 pk8 
+1719:1929 pk9
+1930:2022 pk10
+
+data must be split because it is too large for R otherwise
+```{r pk1, warning=FALSE, message=FALSE}
+pk1 <- police_killed[1:204,]
+for (statecounty in (unique(pk1$county_state))){
+    cW_name <- unlist(strsplit(statecounty," "))[1]
+    stateName <- unlist(strsplit(statecounty," "))[2]
+  x=0
+  for (i in seq(2010,2019,1)){  
+   
+    if  ((pk1$year[pk1$county_state==statecounty][i-2009-x]!=i) | is.na((pk1$year[pk1$county_state==statecounty][i-2009-x]!=i)))
+      {
+     addlist <- data.frame(list(year=i,county_name=cW_name,state=stateName,num_killed_county=0, county_state=statecounty))
+     pk1 <- pk1 %>%
+      bind_rows(addlist)
+       x=x+1
+     }
+  }
+}
+
+pk1 <- arrange(pk1, county_state,year)
+write.csv(pk1,"pk1.csv",row.names = FALSE,col.names = TRUE)
+```
+
+```{r pk2, warning=FALSE, message=FALSE}
+pk2 <- police_killed[205:429,]
+for (statecounty in (unique(pk2$county_state))){
+    cW_name <- unlist(strsplit(statecounty," "))[1]
+    stateName <- unlist(strsplit(statecounty," "))[2]
+  x=0
+  for (i in seq(2010,2019,1)){  
+   
+    if  ((pk2$year[pk2$county_state==statecounty][i-2009-x]!=i) | is.na((pk2$year[pk2$county_state==statecounty][i-2009-x]!=i)))
+      {
+   # print(i)
+    #  print(cW_name)
+    #  print(stateName)
+     addlist <- data.frame(list(year=i,county_name=cW_name,state=stateName,num_killed_county=0, county_state=statecounty))
+     pk2 <- pk2 %>%
+      bind_rows(addlist)
+       x=x+1
+     # wash_post_county <- arrange(wash_post_county,county_name, year)
+     }
+  }
+}
+
+pk2 <- arrange(pk2, county_state,year)
+write.csv(pk2,"pk2.csv",row.names = FALSE,col.names = FALSE)
+```
+
+```{r pk3, warning=FALSE, message=FALSE}
+pk3 <- police_killed[430:637,]
+for (statecounty in (unique(pk3$county_state))){
+    cW_name <- unlist(strsplit(statecounty," "))[1]
+    stateName <- unlist(strsplit(statecounty," "))[2]
+  x=0
+  for (i in seq(2010,2019,1)){  
+   
+    if  ((pk3$year[pk3$county_state==statecounty][i-2009-x]!=i) | is.na((pk3$year[pk3$county_state==statecounty][i-2009-x]!=i)))
+      {
+     addlist <- data.frame(list(year=i,county_name=cW_name,state=stateName,num_killed_county=0, county_state=statecounty))
+     pk3 <- pk3 %>%
+      bind_rows(addlist)
+       x=x+1
+     }
+  }
+}
+
+pk3 <- arrange(pk3, county_state,year)
+write.csv(pk3,"pk3.csv",row.names = FALSE,col.names = FALSE)
+```
+
+```{r pk4, warning=FALSE, message=FALSE}
+pk4 <- police_killed[638:849,]
+for (statecounty in (unique(pk4$county_state))){
+    cW_name <- unlist(strsplit(statecounty," "))[1]
+    stateName <- unlist(strsplit(statecounty," "))[2]
+  x=0
+  for (i in seq(2010,2019,1)){  
+   
+    if  ((pk4$year[pk4$county_state==statecounty][i-2009-x]!=i) | is.na((pk4$year[pk4$county_state==statecounty][i-2009-x]!=i)))
+      {
+     addlist <- data.frame(list(year=i,county_name=cW_name,state=stateName,num_killed_county=0, county_state=statecounty))
+     pk4 <- pk4 %>%
+      bind_rows(addlist)
+       x=x+1
+     }
+  }
+}
+
+pk4 <- arrange(pk4, county_state,year)
+write.csv(pk4,"pk4.csv",row.names = FALSE,col.names = FALSE)
+```
+
+```{r pk5, warning=FALSE, message=FALSE}
+pk5 <- police_killed[850:1052,]
+for (statecounty in (unique(pk5$county_state))){
+    cW_name <- unlist(strsplit(statecounty," "))[1]
+    stateName <- unlist(strsplit(statecounty," "))[2]
+  x=0
+  for (i in seq(2010,2019,1)){  
+   
+    if  ((pk5$year[pk5$county_state==statecounty][i-2009-x]!=i) | is.na((pk5$year[pk5$county_state==statecounty][i-2009-x]!=i)))
+      {
+     addlist <- data.frame(list(year=i,county_name=cW_name,state=stateName,num_killed_county=0, county_state=statecounty))
+     pk5 <- pk5 %>%
+      bind_rows(addlist)
+       x=x+1
+     }
+  }
+}
+
+pk5 <- arrange(pk5, county_state,year)
+write.csv(pk5,"pk5.csv",row.names = FALSE,col.names = FALSE)
+```
+
+```{r pk6, warning=FALSE, message=FALSE}
+pk6 <- police_killed[1053:1274,]
+for (statecounty in (unique(pk6$county_state))){
+    cW_name <- unlist(strsplit(statecounty," "))[1]
+    stateName <- unlist(strsplit(statecounty," "))[2]
+  x=0
+  for (i in seq(2010,2019,1)){  
+   
+    if  ((pk6$year[pk6$county_state==statecounty][i-2009-x]!=i) | is.na((pk6$year[pk6$county_state==statecounty][i-2009-x]!=i)))
+      {
+     addlist <- data.frame(list(year=i,county_name=cW_name,state=stateName,num_killed_county=0, county_state=statecounty))
+     pk6 <- pk6 %>%
+      bind_rows(addlist)
+       x=x+1
+     }
+  }
+}
+
+pk6 <- arrange(pk6, county_state,year)
+write.csv(pk6,"pk6.csv",row.names = FALSE,col.names = FALSE)
+```
+
+```{r pk7, warning=FALSE, message=FALSE}
+pk7 <- police_killed[1275:1495,]
+for (statecounty in (unique(pk7$county_state))){
+    cW_name <- unlist(strsplit(statecounty," "))[1]
+    stateName <- unlist(strsplit(statecounty," "))[2]
+  x=0
+  for (i in seq(2010,2019,1)){  
+   
+    if  ((pk7$year[pk7$county_state==statecounty][i-2009-x]!=i) | is.na((pk7$year[pk7$county_state==statecounty][i-2009-x]!=i)))
+      {
+     addlist <- data.frame(list(year=i,county_name=cW_name,state=stateName,num_killed_county=0, county_state=statecounty))
+     pk7 <- pk7 %>%
+      bind_rows(addlist)
+       x=x+1
+     }
+  }
+}
+
+pk7 <- arrange(pk7, county_state,year)
+write.csv(pk7,"pk7.csv",row.names = FALSE,col.names = FALSE)
+```
+
+```{r pk8, warning=FALSE, message=FALSE}
+pk8 <- police_killed[1496:1718,]
+for (statecounty in (unique(pk8$county_state))){
+    cW_name <- unlist(strsplit(statecounty," "))[1]
+    stateName <- unlist(strsplit(statecounty," "))[2]
+  x=0
+  for (i in seq(2010,2019,1)){  
+   
+    if  ((pk8$year[pk8$county_state==statecounty][i-2009-x]!=i) | is.na((pk8$year[pk8$county_state==statecounty][i-2009-x]!=i)))
+      {
+     addlist <- data.frame(list(year=i,county_name=cW_name,state=stateName,num_killed_county=0, county_state=statecounty))
+     pk8 <- pk8 %>%
+      bind_rows(addlist)
+       x=x+1
+     }
+  }
+}
+
+pk8 <- arrange(pk8, county_state,year)
+write.csv(pk8,"pk8.csv",row.names = FALSE,col.names = FALSE)
+```
+
+```{r pk9, warning=FALSE, message=FALSE}
+pk9 <- police_killed[1719:1929,]
+for (statecounty in (unique(pk9$county_state))){
+    cW_name <- unlist(strsplit(statecounty," "))[1]
+    stateName <- unlist(strsplit(statecounty," "))[2]
+  x=0
+  for (i in seq(2010,2019,1)){  
+   
+    if  ((pk9$year[pk9$county_state==statecounty][i-2009-x]!=i) | is.na((pk9$year[pk9$county_state==statecounty][i-2009-x]!=i)))
+      {
+     addlist <- data.frame(list(year=i,county_name=cW_name,state=stateName,num_killed_county=0, county_state=statecounty))
+     pk9 <- pk9 %>%
+      bind_rows(addlist)
+       x=x+1
+     }
+  }
+}
+
+pk9 <- arrange(pk9, county_state,year)
+write.csv(pk9,"pk9.csv",row.names = FALSE,col.names = FALSE)
+```
+
+```{r pk10, warning=FALSE, message=FALSE}
+pk10 <- police_killed[1930:2022,]
+for (statecounty in (unique(pk10$county_state))){
+    cW_name <- unlist(strsplit(statecounty," "))[1]
+    stateName <- unlist(strsplit(statecounty," "))[2]
+  x=0
+  for (i in seq(2010,2019,1)){  
+   
+    if  ((pk10$year[pk10$county_state==statecounty][i-2009-x]!=i) | is.na((pk10$year[pk10$county_state==statecounty][i-2009-x]!=i)))
+      {
+     addlist <- data.frame(list(year=i,county_name=cW_name,state=stateName,num_killed_county=0, county_state=statecounty))
+     pk10 <- pk10 %>%
+      bind_rows(addlist)
+       x=x+1
+     }
+  }
+}
+
+pk10 <- arrange(pk10, county_state,year)
+write.csv(pk10,"pk10.csv",row.names = FALSE,col.names = FALSE)
+```
+
+```{r combine-pk, echo=TRUE, message=FALSE, warning=FALSE}
+pk_df <- pk1  %>%
+  bind_rows(pk2) %>%
+  bind_rows(pk3) %>%
+  bind_rows(pk4) %>%
+  bind_rows(pk5) %>%
+  bind_rows(pk6) %>%
+  bind_rows(pk7) %>%
+  bind_rows(pk8) %>%
+  bind_rows(pk9) %>%
+  bind_rows(pk10)
+write.csv(pk_df,"pk_df.csv",row.names = FALSE,col.names = TRUE)
+```
+
+```{r read-in-pk-crime, echo=TRUE,message=FALSE,warning=FALSE}
+police_fatal_df <-read.csv("pk_df.csv",stringsAsFactors = FALSE)
+head(police_fatal_df)
+
+head(crimes_yr_county)
+
+head(exon_df)
+```
+
+
+Combining data from fatal police shootings, crime data and exonerations
+```{r police-exon-crime, echo=TRUE, warning=FALSE, message=FALSE}
+police_exon_crime <- police_fatal_df
+police_exon_crime <- police_exon_crime %>%
+  full_join(exon_df,by = c("year"="Occurred","county_state"="county_state")) %>%
+  full_join(crimes_yr_county, by=c("year"="year","county_state"="county_state"))
+
+police_exon_crime <- police_exon_crime[,c("year","county_state","num_killed_county","num_convicted","county_population", "violent_crime_county")]
+police_exon_crime
+```
+
+Relationship between number of exonerated individuals and fatal police shootings
+```{r relationship-shootings-exonerations}
+police_exon <- police_exon[complete.cases(police_exon), ]
+#police_exon
+
+plot(police_exon$num_convicted,police_exon$num_killed_county)
+
+
+
+
+```
+
+##change 2016 crime data from county to city
