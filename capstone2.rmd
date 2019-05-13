@@ -10,7 +10,63 @@ Load libraries
 library(dplyr)
 library(tidyr)
 library(corrplot)
+library(ggplot2)
+require(pscl)
+require(boot)
+library(caret)
+library(randomForest)
+library(segmented)
+library(dummies)
+library(ggraph)
+library(igraph)
 ```
+
+Load incarceration trends
+Data taken from https://www.vera.org/in-our-backyards/ending-mass-incarceration-where-it-begins
+Convert division (region in the US) and urbanicity into dummy variables 
+Remove East North Central(divsion), rural(urbanicity)
+Only keep complete cases
+This removed most rows, but it's ok because those were mostly from the 1970's and 1980's and there was a lot of incompelte data
+```{r}
+incarceration_trends <- read.csv("C:/Users/Swigo/Desktop/Sarah/DATA698/incarceration_trends.csv",fileEncoding="UTF-8-BOM", stringsAsFactors = FALSE)
+
+incarceration_trends <- cbind(incarceration_trends, dummy(incarceration_trends$division))
+incarceration_trends <- cbind(incarceration_trends, dummy(incarceration_trends$urbanicity))
+
+colnames(incarceration_trends) <- gsub("incarceration_trends", "", fixed = TRUE, colnames(incarceration_trends))
+
+incarceration_trends <- incarceration_trends %>%
+  mutate(fraction_black = black_pop_15to64/total_pop_15to64) %>%
+  mutate(fraction_asian = asian_pop_15to64/total_pop_15to64) %>%
+  mutate(fraction_latino = latino_pop_15to64/total_pop_15to64) %>%
+  mutate(fraction_white = white_pop_15to64/total_pop_15to64) %>%
+  mutate(fraction_native = native_pop_15to64/total_pop_15to64) %>%
+  mutate(fraction_black_sent_prison = num_black_sent_prison/num_sent_prison) %>%
+  mutate(fraction_asian_sent_prison = num_asian_sent_prison/num_sent_prison) %>%
+  mutate(fraction_latino_sent_prison = num_latino_sent_prison/num_sent_prison) %>%
+  mutate(fraction_white_sent_prison = num_white_sent_prison/num_sent_prison) %>%
+  mutate(fraction_native_sent_prison = num_native_sent_prison/num_sent_prison)
+
+incarceration_trends <- incarceration_trends[,c("year","state","county_name","East South Central","Middle Atlantic","Mountain","New England","Pacific","South Atlantic","West North Central","West South Central","small/mid","suburban","urban","fraction_black","fraction_asian","fraction_latino","fraction_white","fraction_native","fraction_black_sent_prison","fraction_asian_sent_prison","fraction_latino_sent_prison","fraction_white_sent_prison", "fraction_native_sent_prison")]
+
+incarceration_trends$county_state <- paste(incarceration_trends$county_name,incarceration_trends$state)
+nrow(incarceration_trends)
+
+incarceration_trends <-incarceration_trends[complete.cases(incarceration_trends),]
+incarceration_trends
+```
+
+```{r}
+unemployment <- read.csv("C:/Users/Swigo/Desktop/Sarah/DATA698/Unemployment.csv",fileEncoding="UTF-8-BOM", stringsAsFactors = FALSE)
+
+unemployment <- unemployment %>%
+  gather("year","unemployment_rate",3:13)
+unemployment$year <- gsub("Unemployment_rate_", "", unemployment$year)
+unemployment$year <- as.numeric(unemployment$year)
+unemployment <- arrange(unemployment, county_state)
+unemployment
+```
+
 
 Load data to map cities to counties
 https://simplemaps.com/data/us-cities
@@ -81,7 +137,7 @@ crime_fxn <- function(year_set){
 #crime_df <- crime_fxn(yr)
 for(num in 1999:2017){
   filename <- crime_fxn(num)
-  crime_df <- read.csv(filename, stringsAsFactors = FALSE)
+  crime_df <- read.csv(filename, fileEncoding="UTF-8-BOM", stringsAsFactors = FALSE)
   for (x in 1:nrow(crime_df)){
     if (crime_df$State[x]=="") {
       crime_df$State[x]=crime_df$State[x-1] 
@@ -101,6 +157,7 @@ head(crimes_yr)
 tail(crimes_yr)
 ```
 
+
 Since the exonerations data is tallied by county and the crime data is tallied by city, they need to be made uniform to compare and draw conclusions.  The simple_maps data enables me to map cities to counties.
 ```{r crime_city_to_county, echo=FALSE}
 #head(crimes_yr)
@@ -111,7 +168,7 @@ crimes_yr_county <- crimes_yr_county %>%
   left_join(city_county, by="city","state_name")
 crimes_yr_county <- filter(crimes_yr_county, state_name.x==state_name.y)
 
-#crime index, population and vilent crime fields are characters - converty to numeric variables
+#crime index, population and violent crime fields are characters - converty to numeric variables
 #Some years have a field Crime.Index.Total.  Other years have a field Violent.Crime.  Those two fields are incorporated into a new column violent_crime
 crimes_yr_county$Crime.Index.total <- as.numeric(crimes_yr_county$Crime.Index.total)
 crimes_yr_county$Population <- gsub(",","", crimes_yr_county$Population)
@@ -142,27 +199,6 @@ crimes_yr_county
 ```{r data-into-csv, echo=TRUE, warning=FALSE, message=FALSE}
 write.csv(crimes_yr_county,"crime_all_year.csv",row.names=FALSE,col.names=TRUE)
 ```
-
-
-
-
-
-Load Data Relating to Police Shootings 
-
-The following data table lists median household income by city in each state.
-```{r median_income_data, echo=FALSE}
-med_income <- read.csv("C:/Users/Swigo/Desktop/Sarah/DATA698/MedianHouseholdIncome2015.csv", stringsAsFactors = FALSE)
-head(med_income)
-```
-
-
-The following data table shows the percentage of people over 25 that completed high school by city in each state.
-```{r complete_hs, echo=FALSE}
-complete_hs <- read.csv("C:/Users/Swigo/Desktop/Sarah/DATA698/PercentOver25CompletedHighSchool.csv", stringsAsFactors = FALSE)
-head(complete_hs)
-```
-
-The following data table shows the name, date, manner of death, weapon, age ,gender, race, city, state, signs of mental illness, whether the victim was fleeing and whether the police officer was wearing a body camera for police shootings.  The Kaggle data was collected from 2015 through July 2017.
 
 I will use data from the Washington Post which is from 2015 through 2019
 #info on data can be found https://github.com/washingtonpost/data-police-shootings
@@ -205,7 +241,7 @@ head(police_killing_vice)
 ```
 
 
-The data from Vice News includes victims of police shootings.  The outcome of the shooting is described in the column titled Fatal.  The values are F (fatal), N (not fatal) and U (unknown).  In cases were multiple people were shot, there are multiple values listed in the Fatal field.  I wil be focusing on police shootings that resulted in death so I will only remove cases in which the person who was shot survived.  Because the data set does not list the names of the people involved, there is no way to ascertain the outcome for those listed as unknown.  The data from the Washington Post will be used for 2015-present so the data from Vice will be used for before 2015.
+The data from Vice News includes victims of police shootings.  The outcome of the shooting is described in the column titled Fatal.  The values are F (fatal), N (not fatal) and U (unknown).  In cases were multiple people were shot, there are multiple values listed in the Fatal field.  I wil be focusing on police shootings that resulted in death so I will only remove cases in which the person who was shot survived.  Because the data set does not list the names of the people involved, there is no way to ascertain the outcome for those listed as unknown.  The data from the Washington Post will be used for 2015-present so the data from Vice will be used for 2010 - 2015.
 
 ```{r filter_data, echo=FALSE}
 police_killing_vice_sub <- police_killing_vice %>%
@@ -294,7 +330,365 @@ St. Louis
 
 exon_df lists the number of exonerations per year in which the crime occurred in each county. (from National Registry of Exonerations)
 wash_post lists the number of police shootings per city in which a person was killed between 2015-present (from Washington Post)
-city_year_count lists the number of police shootings per city in which a person was killed between 2010-2014 (frmo Vice News)
+city_year_count lists the number of police shootings per city in which a person was killed between 2010-2014 (from Vice News)
+
+
+Fatal incidents with civilians at the hands of police  from fatalencoutners.org
+This database contains data from 2000-2019
+It includes deaths that result from car chases, suicide, and police shootings.  I filtered the data so that it includes deaths by shooting, beating and tasers only that were not suicides.  This includes accidental deaths and deaths that were deemed justified.  
+Removed blank values for county
+
+```{r load fatal-encounters}
+fatalencounters <- read.csv("C:/Users/Swigo/Desktop/Sarah/DATA698/fatalencounters.csv", stringsAsFactors=FALSE)
+fatalencounters <- filter(fatalencounters, Cause.of.death=="Gunshot"| Cause.of.death=="Beaten/Bludgeoned with instrument"|Cause.of.death=="Tasered")
+fatalencounters <- filter(fatalencounters, Official.disposition.of.death..justified.or.other..INTERNAL.USE..NOT.FOR.ANALYSIS!="Suicide"& Official.disposition.of.death..justified.or.other..INTERNAL.USE..NOT.FOR.ANALYSIS!="Ruled Suicide"& County!="")
+fatalencounters <- fatalencounters[,c("Year","State","County")]
+head(fatalencounters)
+```
+
+Total deaths at the hands of police by year for each county
+```{r totaldeathbyyear_fatalencounters, echo=TRUE, warning=FALSE, message=FALSE}
+fatalencounterst_yr_county <- fatalencounters
+fatalencounterst_yr_county$sum=1
+
+fatalencounterst_yr_county <- fatalencounterst_yr_county %>%
+  group_by(Year, County, State) %>%
+  mutate(num_killed=sum(sum)) %>%
+  unique()
+
+fatalencounterst_yr_county <- fatalencounterst_yr_county[,c("Year","County","State","num_killed")]
+fatalencounterst_yr_county <- arrange(fatalencounterst_yr_county,County,State,Year)
+fatalencounterst_yr_county$county_state <- paste(fatalencounterst_yr_county$County,fatalencounterst_yr_county$State)
+fatalencounterst_yr_county
+```
+
+Fill in missing years with zero killed
+```{r imputezero_fatalencoutersA}
+
+fatalencounterst_yr_county<- arrange(fatalencounterst_yr_county,county_state,Year)
+fatalencounterst_yr_countyA <- fatalencounterst_yr_county[1:867,]
+#fatalencounterst_yr_countyB <- fatalencounterst_yr_county[297:867,]
+
+
+for (statecounty in (unique(fatalencounterst_yr_countyA$county_state))){
+    cW_name <- unlist(strsplit(statecounty," "))[1]
+    if (length(unlist(strsplit(statecounty," ")))==3){
+      cw_name2=unlist(strsplit(statecounty," "))[2]
+      cW_name <- paste(cW_name,cw_name2)
+    }
+    stateName <- unlist(strsplit(statecounty," "))[2]
+  x=0
+  for (i in seq(2000,2019,1)){  
+   
+    if  ((fatalencounterst_yr_county$Year[fatalencounterst_yr_county$county_state==statecounty][i-1999-x]!=i) | is.na((fatalencounterst_yr_county$Year[fatalencounterst_yr_county$county_state==statecounty][i-1999-x]!=i)))
+      {
+    # stateName <- wash_post_county$state[(wash_post_county$county_name==cW_name)][1]
+     addlist <- data.frame(list(Year=i,County=cW_name,State=stateName,num_killed=0, county_state=statecounty))
+     fatalencounterst_yr_countyA <- fatalencounterst_yr_countyA %>%
+      bind_rows(addlist)
+       x=x+1
+     # wash_post_county <- arrange(wash_post_county,county_name, year)
+     }
+  }
+}
+fatalencounterst_yr_countyA<- arrange(fatalencounterst_yr_countyA,county_state,Year)
+fatalencounterst_yr_countyA
+```
+
+```{r writecsvA}
+write.csv(fatalencounterst_yr_countyA,"fatalencounterst_yr_countyA.csv",row.names = FALSE,col.names = TRUE)
+
+```
+```{r}
+fatalencounterst_yr_county[6151:7500,]
+```
+
+
+```{r imputezero_fatalencoutersB}
+
+fatalencounterst_yr_countyB <- fatalencounterst_yr_county[868:1712,]
+
+
+
+for (statecounty in (unique(fatalencounterst_yr_countyB$county_state))){
+    cW_name <- unlist(strsplit(statecounty," "))[1]
+    stateName <- unlist(strsplit(statecounty," "))[2]
+  x=0
+  for (i in seq(2000,2019,1)){  
+   
+    if  ((fatalencounterst_yr_county$Year[fatalencounterst_yr_county$county_state==statecounty][i-1999-x]!=i) | is.na((fatalencounterst_yr_county$Year[fatalencounterst_yr_county$county_state==statecounty][i-1999-x]!=i)))
+      {
+    # stateName <- wash_post_county$state[(wash_post_county$county_name==cW_name)][1]
+     addlist <- data.frame(list(Year=i,County=cW_name,State=stateName,num_killed=0, county_state=statecounty))
+     fatalencounterst_yr_countyB <- fatalencounterst_yr_countyB %>%
+      bind_rows(addlist)
+       x=x+1
+     # wash_post_county <- arrange(wash_post_county,county_name, year)
+     }
+  }
+}
+fatalencounterst_yr_countyB<- arrange(fatalencounterst_yr_countyB,county_state,Year)
+fatalencounterst_yr_countyB
+
+write.csv(fatalencounterst_yr_countyB,"fatalencounterst_yr_countyB.csv",row.names = FALSE,col.names = TRUE)
+```
+
+```{r imputezero_fatalencoutersC}
+
+fatalencounterst_yr_countyC <- fatalencounterst_yr_county[1713:2570,]
+
+
+
+for (statecounty in (unique(fatalencounterst_yr_countyC$county_state))){
+    cW_name <- unlist(strsplit(statecounty," "))[1]
+    stateName <- unlist(strsplit(statecounty," "))[2]
+  x=0
+  for (i in seq(2000,2019,1)){  
+   
+    if  ((fatalencounterst_yr_county$Year[fatalencounterst_yr_county$county_state==statecounty][i-1999-x]!=i) | is.na((fatalencounterst_yr_county$Year[fatalencounterst_yr_county$county_state==statecounty][i-1999-x]!=i)))
+      {
+    # stateName <- wash_post_county$state[(wash_post_county$county_name==cW_name)][1]
+     addlist <- data.frame(list(Year=i,County=cW_name,State=stateName,num_killed=0, county_state=statecounty))
+     fatalencounterst_yr_countyC <- fatalencounterst_yr_countyC %>%
+      bind_rows(addlist)
+       x=x+1
+     # wash_post_county <- arrange(wash_post_county,county_name, year)
+     }
+  }
+}
+fatalencounterst_yr_countyC<- arrange(fatalencounterst_yr_countyC,county_state,Year)
+fatalencounterst_yr_countyC
+
+write.csv(fatalencounterst_yr_countyC,"fatalencounterst_yr_countyC.csv",row.names = FALSE,col.names = TRUE)
+```
+
+```{r imputezero_fatalencoutersD}
+
+fatalencounterst_yr_countyD <- fatalencounterst_yr_county[2571:3426,]
+
+
+
+for (statecounty in (unique(fatalencounterst_yr_countyD$county_state))){
+    cW_name <- unlist(strsplit(statecounty," "))[1]
+    stateName <- unlist(strsplit(statecounty," "))[2]
+  x=0
+  for (i in seq(2000,2019,1)){  
+   
+    if  ((fatalencounterst_yr_county$Year[fatalencounterst_yr_county$county_state==statecounty][i-1999-x]!=i) | is.na((fatalencounterst_yr_county$Year[fatalencounterst_yr_county$county_state==statecounty][i-1999-x]!=i)))
+      {
+    # stateName <- wash_post_county$state[(wash_post_county$county_name==cW_name)][1]
+     addlist <- data.frame(list(Year=i,County=cW_name,State=stateName,num_killed=0, county_state=statecounty))
+     fatalencounterst_yr_countyD <- fatalencounterst_yr_countyD %>%
+      bind_rows(addlist)
+       x=x+1
+     # wash_post_county <- arrange(wash_post_county,county_name, year)
+     }
+  }
+}
+fatalencounterst_yr_countyD<- arrange(fatalencounterst_yr_countyD,county_state,Year)
+fatalencounterst_yr_countyD
+
+write.csv(fatalencounterst_yr_countyD,"fatalencounterst_yr_countyD.csv",row.names = FALSE,col.names = TRUE)
+```
+
+
+```{r imputezero_fatalencoutersE}
+
+fatalencounterst_yr_countyE <- fatalencounterst_yr_county[3427:4323,]
+
+
+
+for (statecounty in (unique(fatalencounterst_yr_countyE$county_state))){
+    
+    cW_name <- unlist(strsplit(statecounty," "))[1]
+    if (length(unlist(strsplit(statecounty," ")))==3){
+      cw_name2=unlist(strsplit(statecounty," "))[2]
+      cW_name <- paste(cW_name,cw_name2)
+    }
+    
+    stateName <- unlist(strsplit(statecounty," "))[length(unlist(strsplit(statecounty," ")))]
+  x=0
+  for (i in seq(2000,2019,1)){  
+   
+    if  ((fatalencounterst_yr_county$Year[fatalencounterst_yr_county$county_state==statecounty][i-1999-x]!=i) | is.na((fatalencounterst_yr_county$Year[fatalencounterst_yr_county$county_state==statecounty][i-1999-x]!=i)))
+      {
+    # stateName <- wash_post_county$state[(wash_post_county$county_name==cW_name)][1]
+     addlist <- data.frame(list(Year=i,County=cW_name,State=stateName,num_killed=0, county_state=statecounty))
+     fatalencounterst_yr_countyE <- fatalencounterst_yr_countyE %>%
+      bind_rows(addlist)
+       x=x+1
+     # wash_post_county <- arrange(wash_post_county,county_name, year)
+     }
+  }
+}
+fatalencounterst_yr_countyE<- arrange(fatalencounterst_yr_countyE,county_state,Year)
+fatalencounterst_yr_countyE
+
+write.csv(fatalencounterst_yr_countyE,"fatalencounterst_yr_countyE.csv",row.names = FALSE,col.names = TRUE)
+```
+
+
+```{r imputezero_fatalencoutersF}
+
+fatalencounterst_yr_countyF <- fatalencounterst_yr_county[4324:5279,]
+
+
+for (statecounty in (unique(fatalencounterst_yr_countyF$county_state))){
+    
+    cW_name <- unlist(strsplit(statecounty," "))[1]
+    if (length(unlist(strsplit(statecounty," ")))==3){
+      cw_name2=unlist(strsplit(statecounty," "))[2]
+      cW_name <- paste(cW_name,cw_name2)
+    }
+    
+    stateName <- unlist(strsplit(statecounty," "))[length(unlist(strsplit(statecounty," ")))]
+  x=0
+  for (i in seq(2000,2019,1)){  
+   
+    if  ((fatalencounterst_yr_county$Year[fatalencounterst_yr_county$county_state==statecounty][i-1999-x]!=i) | is.na((fatalencounterst_yr_county$Year[fatalencounterst_yr_county$county_state==statecounty][i-1999-x]!=i)))
+      {
+    # stateName <- wash_post_county$state[(wash_post_county$county_name==cW_name)][1]
+     addlist <- data.frame(list(Year=i,County=cW_name,State=stateName,num_killed=0, county_state=statecounty))
+     fatalencounterst_yr_countyF <- fatalencounterst_yr_countyF %>%
+      bind_rows(addlist)
+       x=x+1
+     # wash_post_county <- arrange(wash_post_county,county_name, year)
+     }
+  }
+}
+fatalencounterst_yr_countyF<- arrange(fatalencounterst_yr_countyF,county_state,Year)
+fatalencounterst_yr_countyF
+
+write.csv(fatalencounterst_yr_countyF,"fatalencounterst_yr_countyF.csv",row.names = FALSE,col.names = TRUE)
+```
+
+```{r imputezero_fatalencoutersG}
+
+fatalencounterst_yr_countyG <- fatalencounterst_yr_county[5280:6153,]
+
+for (statecounty in (unique(fatalencounterst_yr_countyG$county_state))){
+    
+    cW_name <- unlist(strsplit(statecounty," "))[1]
+    if (length(unlist(strsplit(statecounty," ")))==3){
+      cw_name2=unlist(strsplit(statecounty," "))[2]
+      cW_name <- paste(cW_name,cw_name2)
+    }
+    
+    stateName <- unlist(strsplit(statecounty," "))[length(unlist(strsplit(statecounty," ")))]
+  x=0
+  for (i in seq(2000,2019,1)){  
+   
+    if  ((fatalencounterst_yr_county$Year[fatalencounterst_yr_county$county_state==statecounty][i-1999-x]!=i) | is.na((fatalencounterst_yr_county$Year[fatalencounterst_yr_county$county_state==statecounty][i-1999-x]!=i)))
+      {
+    # stateName <- wash_post_county$state[(wash_post_county$county_name==cW_name)][1]
+     addlist <- data.frame(list(Year=i,County=cW_name,State=stateName,num_killed=0, county_state=statecounty))
+     fatalencounterst_yr_countyG <- fatalencounterst_yr_countyG %>%
+      bind_rows(addlist)
+       x=x+1
+     # wash_post_county <- arrange(wash_post_county,county_name, year)
+     }
+  }
+}
+fatalencounterst_yr_countyG<- arrange(fatalencounterst_yr_countyG,county_state,Year)
+fatalencounterst_yr_countyG
+
+write.csv(fatalencounterst_yr_countyG,"fatalencounterst_yr_countyG.csv",row.names = FALSE,col.names = TRUE)
+```
+
+```{r imputezero_fatalencoutersH}
+
+fatalencounterst_yr_countyH <- fatalencounterst_yr_county[6154:7137,]
+
+for (statecounty in (unique(fatalencounterst_yr_countyH$county_state))){
+    
+    cW_name <- unlist(strsplit(statecounty," "))[1]
+    if (length(unlist(strsplit(statecounty," ")))==3){
+      cw_name2=unlist(strsplit(statecounty," "))[2]
+      cW_name <- paste(cW_name,cw_name2)
+    }
+    
+    stateName <- unlist(strsplit(statecounty," "))[length(unlist(strsplit(statecounty," ")))]
+  x=0
+  for (i in seq(2000,2019,1)){  
+   
+    if  ((fatalencounterst_yr_county$Year[fatalencounterst_yr_county$county_state==statecounty][i-1999-x]!=i) | is.na((fatalencounterst_yr_county$Year[fatalencounterst_yr_county$county_state==statecounty][i-1999-x]!=i)))
+      {
+    # stateName <- wash_post_county$state[(wash_post_county$county_name==cW_name)][1]
+     addlist <- data.frame(list(Year=i,County=cW_name,State=stateName,num_killed=0, county_state=statecounty))
+     fatalencounterst_yr_countyH <- fatalencounterst_yr_countyH %>%
+      bind_rows(addlist)
+       x=x+1
+     # wash_post_county <- arrange(wash_post_county,county_name, year)
+     }
+  }
+}
+fatalencounterst_yr_countyH<- arrange(fatalencounterst_yr_countyH,county_state,Year)
+fatalencounterst_yr_countyH
+
+write.csv(fatalencounterst_yr_countyH,"fatalencounterst_yr_countyH.csv",row.names = FALSE,col.names = TRUE)
+```
+
+```{r imputezero_fatalencoutersI}
+
+fatalencounterst_yr_countyI <- fatalencounterst_yr_county[7138:8062,]
+
+for (statecounty in (unique(fatalencounterst_yr_countyI$county_state))){
+    
+    cW_name <- unlist(strsplit(statecounty," "))[1]
+    if (length(unlist(strsplit(statecounty," ")))==3){
+      cw_name2=unlist(strsplit(statecounty," "))[2]
+      cW_name <- paste(cW_name,cw_name2)
+    }
+    
+    stateName <- unlist(strsplit(statecounty," "))[length(unlist(strsplit(statecounty," ")))]
+  x=0
+  for (i in seq(2000,2019,1)){  
+   
+    if  ((fatalencounterst_yr_county$Year[fatalencounterst_yr_county$county_state==statecounty][i-1999-x]!=i) | is.na((fatalencounterst_yr_county$Year[fatalencounterst_yr_county$county_state==statecounty][i-1999-x]!=i)))
+      {
+    # stateName <- wash_post_county$state[(wash_post_county$county_name==cW_name)][1]
+     addlist <- data.frame(list(Year=i,County=cW_name,State=stateName,num_killed=0, county_state=statecounty))
+     fatalencounterst_yr_countyI <- fatalencounterst_yr_countyI %>%
+      bind_rows(addlist)
+       x=x+1
+     # wash_post_county <- arrange(wash_post_county,county_name, year)
+     }
+  }
+}
+fatalencounterst_yr_countyI<- arrange(fatalencounterst_yr_countyI,county_state,Year)
+fatalencounterst_yr_countyI
+
+write.csv(fatalencounterst_yr_countyI,"fatalencounterst_yr_countyI.csv",row.names = FALSE,col.names = TRUE)
+```
+
+```{r combine-fatalencounters, echo=TRUE, message=FALSE, warning=FALSE}
+fatalencounters_df <- fatalencounterst_yr_countyA  %>%
+  bind_rows(fatalencounterst_yr_countyB) %>%
+  bind_rows(fatalencounterst_yr_countyC) %>%
+  bind_rows(fatalencounterst_yr_countyD) %>%
+  bind_rows(fatalencounterst_yr_countyE) %>%
+  bind_rows(fatalencounterst_yr_countyF) %>%
+  bind_rows(fatalencounterst_yr_countyG) %>%
+  bind_rows(fatalencounterst_yr_countyH) %>%
+  bind_rows(fatalencounterst_yr_countyI) 
+write.csv(fatalencounters_df,"fatalencounters_df.csv",row.names = FALSE,col.names = TRUE)
+```
+
+???why is this here?  it's above
+```{r filter_data, echo=FALSE}
+police_killing_vice_sub <- police_killing_vice %>%
+  filter(year<2015) %>%
+  filter(grepl("F", Fatal, fixed=TRUE))
+head(police_killing_vice_sub)
+```
+
+
+
+
+
+
+
+
 
 Since the exonerations data is tallied by county and the police killing data is tallied by city, they need to be made uniform to compare and draw conclusions.  The simple_maps data enables me to map cities to counties.
 ```{r wash_post_county, echo=FALSE}
@@ -380,9 +774,6 @@ vice_county <- vice_county[,c("year","county_name","state_id","num_killed")]
 colnames(vice_county) <- c("year","county_name","state","num_killed_county")
 vice_county <- arrange(vice_county,county_name, year)
 vice_county
-#wash_post_county <- wash_post_county[,c("year","county_name","num_killed_county")]
-#wash_post_county <- unique(wash_post_county)
-#wash_post_county
 ```
 
 
@@ -560,7 +951,7 @@ data must be split because it is too large for R otherwise
 pk1 <- police_killed[1:204,]
 for (statecounty in (unique(pk1$county_state))){
     cW_name <- unlist(strsplit(statecounty," "))[1]
-    stateName <- unlist(strsplit(statecounty," "))[2]
+    stateName <- unlist(strsplit(statecounty," "))[length(unlist(strsplit(statecounty," ")))]
   x=0
   for (i in seq(2010,2019,1)){  
    
@@ -582,7 +973,7 @@ write.csv(pk1,"pk1.csv",row.names = FALSE,col.names = TRUE)
 pk2 <- police_killed[205:429,]
 for (statecounty in (unique(pk2$county_state))){
     cW_name <- unlist(strsplit(statecounty," "))[1]
-    stateName <- unlist(strsplit(statecounty," "))[2]
+    stateName <- unlist(strsplit(statecounty," "))[length(unlist(strsplit(statecounty," ")))]
   x=0
   for (i in seq(2010,2019,1)){  
    
@@ -608,7 +999,7 @@ write.csv(pk2,"pk2.csv",row.names = FALSE,col.names = FALSE)
 pk3 <- police_killed[430:637,]
 for (statecounty in (unique(pk3$county_state))){
     cW_name <- unlist(strsplit(statecounty," "))[1]
-    stateName <- unlist(strsplit(statecounty," "))[2]
+    stateName <- unlist(strsplit(statecounty," "))[length(unlist(strsplit(statecounty," ")))]
   x=0
   for (i in seq(2010,2019,1)){  
    
@@ -630,7 +1021,7 @@ write.csv(pk3,"pk3.csv",row.names = FALSE,col.names = FALSE)
 pk4 <- police_killed[638:849,]
 for (statecounty in (unique(pk4$county_state))){
     cW_name <- unlist(strsplit(statecounty," "))[1]
-    stateName <- unlist(strsplit(statecounty," "))[2]
+    stateName <- unlist(strsplit(statecounty," "))[length(unlist(strsplit(statecounty," ")))]
   x=0
   for (i in seq(2010,2019,1)){  
    
@@ -652,7 +1043,7 @@ write.csv(pk4,"pk4.csv",row.names = FALSE,col.names = FALSE)
 pk5 <- police_killed[850:1052,]
 for (statecounty in (unique(pk5$county_state))){
     cW_name <- unlist(strsplit(statecounty," "))[1]
-    stateName <- unlist(strsplit(statecounty," "))[2]
+    stateName <- unlist(strsplit(statecounty," "))[length(unlist(strsplit(statecounty," ")))]
   x=0
   for (i in seq(2010,2019,1)){  
    
@@ -674,7 +1065,7 @@ write.csv(pk5,"pk5.csv",row.names = FALSE,col.names = FALSE)
 pk6 <- police_killed[1053:1274,]
 for (statecounty in (unique(pk6$county_state))){
     cW_name <- unlist(strsplit(statecounty," "))[1]
-    stateName <- unlist(strsplit(statecounty," "))[2]
+    stateName <- unlist(strsplit(statecounty," "))[length(unlist(strsplit(statecounty," ")))]
   x=0
   for (i in seq(2010,2019,1)){  
    
@@ -696,7 +1087,7 @@ write.csv(pk6,"pk6.csv",row.names = FALSE,col.names = FALSE)
 pk7 <- police_killed[1275:1495,]
 for (statecounty in (unique(pk7$county_state))){
     cW_name <- unlist(strsplit(statecounty," "))[1]
-    stateName <- unlist(strsplit(statecounty," "))[2]
+    stateName <- unlist(strsplit(statecounty," "))[length(unlist(strsplit(statecounty," ")))]
   x=0
   for (i in seq(2010,2019,1)){  
    
@@ -718,7 +1109,7 @@ write.csv(pk7,"pk7.csv",row.names = FALSE,col.names = FALSE)
 pk8 <- police_killed[1496:1718,]
 for (statecounty in (unique(pk8$county_state))){
     cW_name <- unlist(strsplit(statecounty," "))[1]
-    stateName <- unlist(strsplit(statecounty," "))[2]
+    stateName <- unlist(strsplit(statecounty," "))[length(unlist(strsplit(statecounty," ")))]
   x=0
   for (i in seq(2010,2019,1)){  
    
@@ -740,7 +1131,7 @@ write.csv(pk8,"pk8.csv",row.names = FALSE,col.names = FALSE)
 pk9 <- police_killed[1719:1929,]
 for (statecounty in (unique(pk9$county_state))){
     cW_name <- unlist(strsplit(statecounty," "))[1]
-    stateName <- unlist(strsplit(statecounty," "))[2]
+    stateName <- unlist(strsplit(statecounty," "))[length(unlist(strsplit(statecounty," ")))]
   x=0
   for (i in seq(2010,2019,1)){  
    
@@ -762,7 +1153,7 @@ write.csv(pk9,"pk9.csv",row.names = FALSE,col.names = FALSE)
 pk10 <- police_killed[1930:2022,]
 for (statecounty in (unique(pk10$county_state))){
     cW_name <- unlist(strsplit(statecounty," "))[1]
-    stateName <- unlist(strsplit(statecounty," "))[2]
+    stateName <- unlist(strsplit(statecounty," "))[length(unlist(strsplit(statecounty," ")))]
   x=0
   for (i in seq(2010,2019,1)){  
    
@@ -797,34 +1188,800 @@ write.csv(pk_df,"pk_df.csv",row.names = FALSE,col.names = TRUE)
 ```{r read-in-pk-crime, echo=TRUE,message=FALSE,warning=FALSE}
 police_fatal_df <-read.csv("pk_df.csv",stringsAsFactors = FALSE)
 head(police_fatal_df)
-
+crimes_yr_county <-read.csv("crime_all_year.csv",stringsAsFactors = FALSE)
 head(crimes_yr_county)
-
+fatalencounters_df <-read.csv("fatalencounters_df.csv",stringsAsFactors = FALSE)
+head(fatalencounters_df)
 head(exon_df)
+exon_df
 ```
 
 
 Combining data from fatal police shootings, crime data and exonerations
+Impute zero for number of convicted who were exonerated if value is na
 ```{r police-exon-crime, echo=TRUE, warning=FALSE, message=FALSE}
 police_exon_crime <- police_fatal_df
 police_exon_crime <- police_exon_crime %>%
   full_join(exon_df,by = c("year"="Occurred","county_state"="county_state")) %>%
-  full_join(crimes_yr_county, by=c("year"="year","county_state"="county_state"))
+  full_join(crimes_yr_county, by=c("year"="year","county_state"="county_state")) %>%
+  left_join(incarceration_trends, by=c("year"="year","county_state"="county_state"))%>%
+  left_join(unemployment, by=c("year"="year","county_state"="county_state"))
 
-police_exon_crime <- police_exon_crime[,c("year","county_state","num_killed_county","num_convicted","county_population", "violent_crime_county")]
+police_exon_crime <- police_exon_crime[,c("year","state.x","county_state","num_killed_county","num_convicted","county_population", "violent_crime_county","unemployment_rate","East South Central","Middle Atlantic","Mountain","New England","Pacific","South Atlantic","West North Central","West South Central","small/mid","suburban","urban","fraction_black","fraction_asian","fraction_latino","fraction_white","fraction_native","fraction_black_sent_prison","fraction_asian_sent_prison","fraction_latino_sent_prison","fraction_white_sent_prison", "fraction_native_sent_prison")]
+police_exon_crime$num_convicted[is.na(police_exon_crime$num_convicted)] <- 0
+
+police_exon_crime <- police_exon_crime %>%
+  mutate(ratio_black_sentprison__to_pop = fraction_black_sent_prison/fraction_black) %>%
+  mutate(ratio_native_sentprison__to_pop = fraction_native_sent_prison/fraction_native) %>%
+  mutate(ratio_white_sentprison__to_pop = fraction_white_sent_prison/fraction_white) %>%
+  mutate(ratio_latino_sentprison__to_pop = fraction_latino_sent_prison/fraction_latino) %>%
+  mutate(ratio_asian_sentprison__to_pop = fraction_asian_sent_prison/fraction_asian)
+
+police_exon_crime_vice_wp <- police_exon_crime
+```
+
+
+Do the same join but using fatal encounters data 
+```{r police-exon-crime, echo=TRUE, warning=FALSE, message=FALSE}
+police_exon_crime <- fatalencounters_df
+police_exon_crime <- police_exon_crime %>%
+  full_join(exon_df,by = c("Year"="Occurred","county_state"="county_state")) %>%
+  full_join(crimes_yr_county, by=c("Year"="year","county_state"="county_state")) %>%      left_join(incarceration_trends, by=c("Year"="year","county_state"="county_state"))%>%
+  left_join(unemployment, by=c("Year"="year","county_state"="county_state")) 
+
+police_exon_crime <- police_exon_crime[,c("Year","county_state","num_killed","num_convicted","county_population", "violent_crime_county","unemployment_rate","East South Central","Middle Atlantic","Mountain","New England","Pacific","South Atlantic","West North Central","West South Central", "small/mid","suburban", "urban", "fraction_black", "fraction_asian","fraction_latino","fraction_white","fraction_native","fraction_black_sent_prison","fraction_asian_sent_prison","fraction_latino_sent_prison","fraction_white_sent_prison", "fraction_native_sent_prison")]
+police_exon_crime$num_convicted[is.na(police_exon_crime$num_convicted)] <- 0
+
+police_exon_crime <- police_exon_crime %>%
+  mutate(ratio_black_sentprison__to_pop = fraction_black_sent_prison/fraction_black) %>%
+  mutate(ratio_native_sentprison__to_pop = fraction_native_sent_prison/fraction_native) %>%
+  mutate(ratio_white_sentprison__to_pop = fraction_white_sent_prison/fraction_white) %>%
+  mutate(ratio_latino_sentprison__to_pop = fraction_latino_sent_prison/fraction_latino) %>%
+  mutate(ratio_asian_sentprison__to_pop = fraction_asian_sent_prison/fraction_asian)
+
+
 police_exon_crime
 ```
 
+Impute missing values for regions and urbanicity
+```{r}
+police_exon_crime2 <- police_exon_crime %>%
+  group_by(county_state) %>%
+  mutate(Pacific = replace(Pacific, mean(Pacific, na.rm=T)==0, 0),
+         Pacific = replace(Pacific, mean(Pacific, na.rm=T)!=0, 1)) %>%
+  mutate(`East South Central` = replace(`East South Central`, mean(`East South Central`, na.rm=T)==0, 0),
+         `East South Central` = replace(`East South Central`, mean(`East South Central`, na.rm=T)!=0, 1)) %>%
+  mutate(`Middle Atlantic` = replace(`Middle Atlantic`, mean(`Middle Atlantic`, na.rm=T)==0, 0),
+         `Middle Atlantic` = replace(`Middle Atlantic`, mean(`Middle Atlantic`, na.rm=T)!=0, 1)) %>%
+  mutate(Mountain = replace(Mountain, mean(Mountain, na.rm=T)==0, 0),
+         Mountain = replace(Mountain, mean(Mountain, na.rm=T)!=0, 1)) %>%
+  mutate(`New England` = replace(`New England`, mean(`New England`, na.rm=T)==0, 0),
+         `New England` = replace(`New England`, mean(`New England`, na.rm=T)!=0, 1)) %>%
+  mutate(`South Atlantic` = replace(`South Atlantic`, mean(`South Atlantic`, na.rm=T)==0, 0),
+         `South Atlantic` = replace(`South Atlantic`, mean(`South Atlantic`, na.rm=T)!=0, 1)) %>%
+  mutate(`West North Central` = replace(`West North Central`, mean(`West North Central`, na.rm=T)==0, 0),
+         `West North Central` = replace(`West North Central`, mean(`West North Central`, na.rm=T)!=0, 1)) %>%
+  mutate(`West South Central` = replace(`West South Central`, mean(`West South Central`, na.rm=T)==0, 0),
+         `West South Central` = replace(`West South Central`, mean(`West South Central`, na.rm=T)!=0, 1)) %>%
+  mutate(`small/mid` = replace(`small/mid`, mean(`small/mid`, na.rm=T)==0, 0),
+         `small/mid` = replace(`small/mid`, mean(`small/mid`, na.rm=T)!=0, 1)) %>%
+  mutate(suburban = replace(suburban, mean(suburban, na.rm=T)==0, 0),
+         suburban = replace(suburban, mean(suburban, na.rm=T)!=0, 1)) %>%
+  mutate(urban = replace(urban, mean(urban, na.rm=T)==0, 0),
+         urban = replace(urban, mean(urban, na.rm=T)!=0, 1)) 
+
+police_exon_crime2
+police_exon_crime <-police_exon_crime2
+
+
+police_exon_crime_vice_wp <- police_exon_crime_vice_wp %>%
+  group_by(county_state) %>%
+  mutate(Pacific = replace(Pacific, mean(Pacific, na.rm=T)==0, 0),
+         Pacific = replace(Pacific, mean(Pacific, na.rm=T)!=0, 1)) %>%
+  mutate(`East South Central` = replace(`East South Central`, mean(`East South Central`, na.rm=T)==0, 0),
+         `East South Central` = replace(`East South Central`, mean(`East South Central`, na.rm=T)!=0, 1)) %>%
+  mutate(`Middle Atlantic` = replace(`Middle Atlantic`, mean(`Middle Atlantic`, na.rm=T)==0, 0),
+         `Middle Atlantic` = replace(`Middle Atlantic`, mean(`Middle Atlantic`, na.rm=T)!=0, 1)) %>%
+  mutate(Mountain = replace(Mountain, mean(Mountain, na.rm=T)==0, 0),
+         Mountain = replace(Mountain, mean(Mountain, na.rm=T)!=0, 1)) %>%
+  mutate(`New England` = replace(`New England`, mean(`New England`, na.rm=T)==0, 0),
+         `New England` = replace(`New England`, mean(`New England`, na.rm=T)!=0, 1)) %>%
+  mutate(`South Atlantic` = replace(`South Atlantic`, mean(`South Atlantic`, na.rm=T)==0, 0),
+         `South Atlantic` = replace(`South Atlantic`, mean(`South Atlantic`, na.rm=T)!=0, 1)) %>%
+  mutate(`West North Central` = replace(`West North Central`, mean(`West North Central`, na.rm=T)==0, 0),
+         `West North Central` = replace(`West North Central`, mean(`West North Central`, na.rm=T)!=0, 1)) %>%
+  mutate(`West South Central` = replace(`West South Central`, mean(`West South Central`, na.rm=T)==0, 0),
+         `West South Central` = replace(`West South Central`, mean(`West South Central`, na.rm=T)!=0, 1)) %>%
+  mutate(`small/mid` = replace(`small/mid`, mean(`small/mid`, na.rm=T)==0, 0),
+         `small/mid` = replace(`small/mid`, mean(`small/mid`, na.rm=T)!=0, 1)) %>%
+  mutate(suburban = replace(suburban, mean(suburban, na.rm=T)==0, 0),
+         suburban = replace(suburban, mean(suburban, na.rm=T)!=0, 1)) %>%
+  mutate(urban = replace(urban, mean(urban, na.rm=T)==0, 0),
+         urban = replace(urban, mean(urban, na.rm=T)!=0, 1))
+
+```
+
+
+Look at rates of crime, exonerations and police shootings as a fraction of the population.  Impute average of previous and next year for missing population data.  If both data points don't exist, take the earlier year.  : for fatalencounters data  
+
+```{r percentages-fatalencounters, echo=TRUE}
+police_exon_crime_rates <- police_exon_crime
+for (i in 1:nrow(police_exon_crime_rates)){
+  if (is.na(police_exon_crime_rates$county_population[i])==TRUE){
+    if (police_exon_crime_rates$county_state[i-1]==police_exon_crime_rates$county_state[i+1] &   is.na(police_exon_crime_rates$county_population[i-1])==FALSE &
+        is.na(police_exon_crime_rates$county_population[i+1])==FALSE){
+      police_exon_crime_rates$county_population[i]=(police_exon_crime_rates$county_population[i-1]+police_exon_crime_rates$county_population[i+1])/2
+      
+    }
+    else{
+      if (police_exon_crime_rates$county_state[i-1]==police_exon_crime_rates$county_state[i]) {
+      police_exon_crime_rates$county_population[i]=police_exon_crime_rates$county_population[i-1]}
+    }
+  }
+  
+ 
+}
+police_exon_crime_rates <- police_exon_crime_rates %>%
+  mutate(num_killed_percent = num_killed*100/county_population) %>%
+  mutate(num_convicted_percent = num_convicted*100/county_population) %>%
+  mutate(num_crime_percent = violent_crime_county*100/county_population)
+police_exon_crime_rates <- police_exon_crime_rates[complete.cases(police_exon_crime_rates),]
+police_exon_crime_rates
+```
+
+percentages for data from vice and washington post
+```{r percentages-vice-wp, echo=TRUE}
+police_exon_crime_rates_vwp <- police_exon_crime_vice_wp
+for (i in 1:nrow(police_exon_crime_rates_vwp)){
+  if (is.na(police_exon_crime_rates_vwp$county_population[i])==TRUE){
+    if (police_exon_crime_rates_vwp$county_state[i-1]==police_exon_crime_rates_vwp$county_state[i+1] &   is.na(police_exon_crime_rates_vwp$county_population[i-1])==FALSE &
+        is.na(police_exon_crime_rates_vwp$county_population[i+1])==FALSE){
+      police_exon_crime_rates_vwp$county_population[i]=(police_exon_crime_rates_vwp$county_population[i-1]+police_exon_crime_rates_vwp$county_population[i+1])/2
+      
+    }
+    else{
+      if (police_exon_crime_rates_vwp$county_state[i-1]==police_exon_crime_rates_vwp$county_state[i]) {
+      police_exon_crime_rates_vwp$county_population[i]=police_exon_crime_rates_vwp$county_population[i-1]}
+    }
+  }
+  
+ 
+}
+police_exon_crime_rates_vwp <- police_exon_crime_rates_vwp %>%
+  mutate(num_killed_percent = num_killed_county*100/county_population) %>%
+  mutate(num_convicted_percent = num_convicted*100/county_population) %>%
+  mutate(num_crime_percent = violent_crime_county*100/county_population)
+#police_exon_crime_rates_vwp <- police_exon_crime_rates_vwp[complete.cases(police_exon_crime_rates_vwp),]
+police_exon_crime_rates_vwp
+```
+
+
+
+Relationship between number of exonerated individuals and fatal police shootings
+fatal encounters
+```{r relationship-shootings-exonerations}
+#police_exon <- police_exon_crime[complete.cases(police_exon_crime), ]
+police_exon <- police_exon_crime_rates
+#police_exon$num_convicted_ratio <- as.numeric(police_exon$num_convicted_ratio)
+#police_exon$num_killed_ratio <- as.numeric(police_exon$num_killed_ratio)
+plot(police_exon$num_convicted_percent,police_exon$num_killed_percent)
+plot(police_exon$num_crime_percent,police_exon$num_killed_percent)
+plot(police_exon$num_crime_percent,police_exon$num_convicted_percent)
+
+#which(police_exon_crime$num_convicted==max(police_exon_crime$num_convicted))
+#police_exon_crime[4680:4688,]
+
+hist(police_exon$num_convicted_percent)
+hist(police_exon$num_killed_percent)
+hist(police_exon$num_crime_percent)
+```
+
+for vice and washington post data
 Relationship between number of exonerated individuals and fatal police shootings
 ```{r relationship-shootings-exonerations}
-police_exon <- police_exon[complete.cases(police_exon), ]
-#police_exon
+#police_exon <- police_exon_crime[complete.cases(police_exon_crime), ]
+##police_exon_vwp <- police_exon_crime_rates_vwp
+#police_exon$num_convicted_ratio <- as.numeric(police_exon$num_convicted_ratio)
+#police_exon$num_killed_ratio <- as.numeric(police_exon$num_killed_ratio)
+plot(police_exon_crime_rates_vwp$num_convicted_percent,police_exon_crime_rates_vwp$num_killed_percent)
+plot(police_exon_crime_rates_vwp$num_crime_percent,police_exon_crime_rates_vwp$num_killed_percent)
+plot(police_exon_crime_rates_vwp$num_crime_percent,police_exon_crime_rates_vwp$num_convicted_percent)
 
-plot(police_exon$num_convicted,police_exon$num_killed_county)
+
+hist(police_exon_crime_rates_vwp$num_convicted_percent)
+hist(police_exon_crime_rates_vwp$num_killed_percent)
+hist(police_exon_crime_rates_vwp$num_crime_percent)
+hist(police_exon_crime_rates_vwp$fraction_asian)
 
 
+
+ggplot(police_exon_crime_rates_vwp, aes(num_convicted_percent)) + geom_histogram() + scale_x_log10()
+ggplot(police_exon_crime_rates_vwp, aes(num_killed_percent)) + geom_histogram() + scale_x_log10()
+ggplot(police_exon_crime_rates_vwp, aes(num_crime_percent)) + geom_histogram() + scale_x_log10()
+#which(police_exon_crime$num_convicted==max(police_exon_crime$num_convicted))
+#police_exon_crime[4680:4688,]
+```
+
+for fatal encounters data
+Relationship between number of exonerated individuals and fatal police shootings
+```{r relationship-shootings-exonerations}
+
+plot(police_exon$num_convicted_percent,police_exon$num_killed_percent)
+plot(police_exon$num_convicted_percent,police_exon$fraction_asian)
+plot(police_exon$num_convicted_percent,police_exon$fraction_white)
+plot(police_exon$num_convicted_percent,police_exon$fraction_black)
+plot(police_exon$num_convicted_percent,police_exon$fraction_native)
+plot(police_exon$num_convicted_percent,police_exon$fraction_latino)
+
+plot(police_exon$num_crime_percent,police_exon$num_killed_percent)
+plot(police_exon$num_convicted_percent,police_exon$num_crime_percent)
+
+
+hist(police_exon$num_convicted_percent)
+hist(police_exon$num_killed_percent)
+hist(police_exon$num_crime_percent)
+hist(police_exon$fraction_asian)
+
+
+
+ggplot(police_exon, aes(num_convicted_percent)) + geom_histogram() + scale_x_log10()
+ggplot(police_exon, aes(num_killed_percent)) + geom_histogram() + scale_x_log10()
+ggplot(police_exon, aes(num_crime_percent)) + geom_histogram() + scale_x_log10()
+
+```
+
+
+Correlation between variables - fatal encounters
+```{r relationship, echo=TRUE, message=FALSE,warning=FALSE, cache=TRUE, fig.width=10}
+predictors <- police_exon[,c("num_crime_percent","num_killed_percent","num_convicted_percent","unemployment_rate","East South Central","Middle Atlantic","Mountain","New England","Pacific","South Atlantic","West North Central","West South Central", "small/mid","suburban", "urban", "fraction_black", "fraction_asian","fraction_latino","fraction_white","fraction_native","fraction_black_sent_prison","fraction_asian_sent_prison","fraction_latino_sent_prison","fraction_white_sent_prison", "fraction_native_sent_prison","ratio_asian_sentprison__to_pop","ratio_black_sentprison__to_pop","ratio_white_sentprison__to_pop","ratio_latino_sentprison__to_pop","ratio_native_sentprison__to_pop")]
+
+correlation_pred <- cor(predictors, method = "pearson")
+correlation_pred
+corrplot::corrplot(correlation_pred, type="upper", method="color")
+```
+
+```{r}
+write.csv(police_exon_crime_rates_vwp,"police_exon_vwp.csv",row.names=FALSE,col.names=TRUE)
 
 
 ```
 
-##change 2016 crime data from county to city
+
+
+Correlation between variables vice and washington post
+```{r relationship, echo=TRUE, message=FALSE,warning=FALSE, cache=TRUE, fig.width=10}
+predictors_vwp <- police_exon_crime_rates_vwp[,c("num_crime_percent","num_killed_percent","num_convicted_percent","unemployment_rate","East South Central","Middle Atlantic","Mountain","New England","Pacific","South Atlantic","West North Central","West South Central", "small/mid","suburban", "urban", "fraction_black", "fraction_asian","fraction_latino","fraction_white","fraction_native","fraction_black_sent_prison","fraction_asian_sent_prison","fraction_latino_sent_prison","fraction_white_sent_prison", "fraction_native_sent_prison","ratio_asian_sentprison__to_pop","ratio_black_sentprison__to_pop","ratio_white_sentprison__to_pop","ratio_latino_sentprison__to_pop","ratio_native_sentprison__to_pop")]
+predictors_vwp <- predictors_vwp[complete.cases(predictors_vwp),]
+correlation_pred <- cor(predictors_vwp, method = "pearson")
+correlation_pred
+corrplot::corrplot(correlation_pred, type="upper", method="color")
+```
+
+```{r boxplots, echo=TRUE}
+boxplot(police_exon_crime_rates_vwp$num_killed_percent)
+boxplot(police_exon_crime_rates_vwp$num_convicted_percent)
+boxplot(police_exon_crime_rates_vwp$num_crime_percent)
+boxplot(police_exon_crime_rates_vwp$fraction_asian)
+boxplot(police_exon_crime_rates_vwp$fraction_white)
+boxplot(police_exon_crime_rates_vwp$fraction_black)
+boxplot(police_exon_crime_rates_vwp$fraction_native)
+boxplot(police_exon_crime_rates_vwp$fraction_latino)
+
+boxplot(police_exon$num_killed_percent)
+boxplot(police_exon$fraction_asian)
+boxplot(police_exon$fraction_white)
+boxplot(police_exon$fraction_black)
+boxplot(police_exon$fraction_native)
+boxplot(police_exon$fraction_latino)
+```
+
+```{r plotvsyear,echo=TRUE}
+#plot(police_exon_crime_rates_vwp$year,police_exon_crime_rates_vwp$num_killed_percent)
+#plot(police_exon_crime_rates$Year,police_exon_crime_rates$num_killed_percent)
+
+#ggplot(police_exon_crime_rates_vwp, aes(x=year, y=num_killed_percent)) +
+ # geom_line(aes(color=police_exon_crime_rates_vwp$state)) + facet_wrap(~ state)+ scale_colour_discrete()
+
+#ggplot(police_exon_crime_rates_vwp, aes(x=year, y=num_convicted_percent)) +
+#  geom_point(aes(color=police_exon_crime_rates_vwp$state)) + facet_wrap(~ #state)+scale_colour_discrete()
+
+
+#ggplot(subset(police_exon_crime_rates_vwp, num_convicted_percent > .000001), aes(x=year, y=num_convicted_percent, group=state, color=state)) +
+ # geom_point()+
+#  facet_wrap(~ state)
+
+#ggplot(subset(police_exon_crime_rates_vwp, num_killed_percent > .01), aes(x=year, y=num_killed_percent, group=state, color=state)) +
+#  geom_point()+
+ # facet_wrap(~ state)
+
+#ggplot(subset(police_exon_crime_rates_vwp, num_crime_percent > 1), aes(x=year, y=num_crime_percent, group=state, color=state)) +
+ # geom_point()+
+#  facet_wrap(~ state)
+
+#ggplot(subset(police_exon_crime_rates_vwp, state=="TX"), aes(x=num_killed_percent, y=num_convicted_percent, group=county_state, color=county_state)) +
+#  geom_point()+
+#  facet_wrap(~ county_state)
+
+ggplot(subset(police_exon_crime_rates_vwp), aes(x=num_killed_percent, y=num_convicted_percent, group=`West South Central`, color=`West South Central`)) +
+  geom_point()+
+  facet_wrap(~ `West South Central`)
+
+
+
+ggplot(subset(police_exon), aes(x=num_killed_percent, y=num_convicted_percent, group=urban, color=urban)) +
+  geom_point()
+```
+
+```{r, fig.height=5}
+ggplot(data=police_exon, aes(x=num_convicted, scales = "free"), color='blue') +
+  geom_histogram(fill="blue") + 
+  labs(x="Exonerations", title="Number of Exonerated Individuals") 
+
+dev.copy(png,'zero_exon.png')
+dev.off()
+
+ggplot(subset(police_exon, num_convicted>0),aes(x=num_convicted)) +
+  geom_histogram(fill="blue") + 
+  labs(x="Exonerations",title="Number of Exonerated Individuals Greater than 0")
+
+dev.copy(png,'greater_zero_exon.png')
+dev.off()
+
+zero.data.plot <- function(data){
+  data %>%
+    VIM::aggr(col=c('navyblue', 'yellow'),
+      numbers=TRUE, sortVars=TRUE,
+      labels=names(data), cex.axis=.3,
+      gap=2, ylab=c('Zero Data', 'Pattern'), combined=TRUE
+    )
+}
+police_exon_NA <- police_exon_crime_rates_vwp
+police_exon_NA <- police_exon_NA[,c("num_crime_percent","num_killed_percent","num_convicted_percent","unemployment_rate","East South Central","Middle Atlantic","Mountain","New England","Pacific","South Atlantic","West North Central","West South Central", "small/mid","suburban", "urban", "fraction_black", "fraction_asian","fraction_latino","fraction_white","fraction_native","fraction_black_sent_prison","fraction_asian_sent_prison","fraction_latino_sent_prison","fraction_white_sent_prison", "fraction_native_sent_prison","ratio_asian_sentprison__to_pop","ratio_black_sentprison__to_pop","ratio_white_sentprison__to_pop","ratio_latino_sentprison__to_pop","ratio_native_sentprison__to_pop")]
+police_exon_NA[police_exon_NA==0] <-NA
+zero.data.plot(police_exon_NA)
+
+dev.copy(png,'zero_values.png')
+dev.off()
+
+#p + facet_wrap(~num_convicted>0, scales = "free_y", labeller = labeller(list("FALSE"="0 Exonerations","TRUE"=">0 Exonerations")))
+
+ggplot(data=police_exon, aes(x=num_killed_percent, group=urban,fill=urban)) +
+  geom_histogram()
+
+ggplot(data=police_exon, aes(x=num_convicted_percent, group=urban,fill=urban)) +
+  geom_histogram()
+
+#ggplot(police_exon_crime_rates_vwp, aes(x=year, y=num_crime_percent)) +
+#  geom_line(aes(color=police_exon_crime_rates_vwp$state)) + facet_wrap(~ #state)+scale_colour_discrete()
+
+largest_percenatge <- which.max(police_exon$num_convicted_percent)
+police_exon[largest_percenatge,]
+```
+
+in histogram above, values for zero start above the values for 1 (they are not on top of each other)
+
+create data sets with only variables for predicting
+- doing this for data from Vice/Washington Post and Fatal Encounters
+and doing log transform x+1 for each data set
+log 0 is infinity so I will perform transformation log(x+1) this enables
+x=0 to map to zero. This is accomplished using function log1p()
+#boxcox.fit() in geoR will fit parameters.
+???start checking here??
+```{r}
+police_exon_crime_rates_vwp <- police_exon_crime_rates_vwp[complete.cases(police_exon_crime_rates_vwp),]
+
+police_exon_crime_rates_vwp_vars <- police_exon_crime_rates_vwp[,c("num_convicted","num_crime_percent","num_killed_percent","county_population","unemployment_rate","East South Central","Middle Atlantic","Mountain","New England","Pacific","South Atlantic","West North Central","West South Central", "small/mid","suburban", "urban", "fraction_black", "fraction_asian","fraction_latino","fraction_white","fraction_native","fraction_black_sent_prison","fraction_asian_sent_prison","fraction_latino_sent_prison","fraction_white_sent_prison", "fraction_native_sent_prison","ratio_asian_sentprison__to_pop","ratio_black_sentprison__to_pop","ratio_white_sentprison__to_pop","ratio_latino_sentprison__to_pop","ratio_native_sentprison__to_pop")]
+police_exon_crime_rates_vwp_vars <- police_exon_crime_rates_vwp_vars[complete.cases(police_exon_crime_rates_vwp_vars),]
+
+police_exon_crime_rates_vwp_vars_scaled <- police_exon_crime_rates_vwp_vars
+police_exon_crime_rates_vwp_vars_scaled$county_population <- police_exon_crime_rates_vwp_vars_scaled$county_population/1000
+
+police_exon_crime_rates_fatalencounters_vars <- police_exon_crime_rates[,c("num_convicted","num_crime_percent","num_killed_percent","county_population","unemployment_rate","East South Central","Middle Atlantic","Mountain","New England","Pacific","South Atlantic","West North Central","West South Central", "small/mid","suburban", "urban", "fraction_black", "fraction_asian","fraction_latino","fraction_white","fraction_native","fraction_black_sent_prison","fraction_asian_sent_prison","fraction_latino_sent_prison","fraction_white_sent_prison", "fraction_native_sent_prison","ratio_asian_sentprison__to_pop","ratio_black_sentprison__to_pop","ratio_white_sentprison__to_pop","ratio_latino_sentprison__to_pop","ratio_native_sentprison__to_pop")]
+
+police_exon_crime_rates_fe_vars_scaled <- police_exon_crime_rates_fatalencounters_vars
+police_exon_crime_rates_fe_vars_scaled$county_population <- police_exon_crime_rates_fe_vars_scaled$county_population/10000
+police_exon_crime_rates_fe_vars_scaled
+
+police_exon_crime_rates_vwp_log <- police_exon_crime_rates_vwp %>%
+  mutate(log_crime=log1p(violent_crime_county/county_population)) %>%
+  mutate(log_killed=log1p(num_killed_county/county_population)) %>%
+  mutate(log_pop=log1p(county_population))
+police_exon_crime_rates_vwp_log <- police_exon_crime_rates_vwp_log[,c("num_convicted","log_crime","log_killed","log_pop","unemployment_rate","East South Central","Middle Atlantic","Mountain","New England","Pacific","South Atlantic","West North Central","West South Central", "small/mid","suburban", "urban", "fraction_black", "fraction_asian","fraction_latino","fraction_white","fraction_native","fraction_black_sent_prison","fraction_asian_sent_prison","fraction_latino_sent_prison","fraction_white_sent_prison", "fraction_native_sent_prison")]
+police_exon_crime_rates_vwp_log_scaled<-police_exon_crime_rates_vwp_log
+police_exon_crime_rates_vwp_log_scaled$log_pop <- police_exon_crime_rates_vwp_log_scaled$log_pop/100
+
+
+police_exon_crime_rates_fe_log <- police_exon_crime_rates %>%
+  mutate(log_crime=log1p(violent_crime_county/county_population)) %>%
+  mutate(log_killed=log1p(num_killed/county_population)) 
+police_exon_crime_rates_fe_log <- police_exon_crime_rates_fe_log[,c("num_convicted","log_crime","log_killed","county_population","unemployment_rate","East South Central","Middle Atlantic","Mountain","New England","Pacific","South Atlantic","West North Central","West South Central", "small/mid","suburban", "urban", "fraction_black", "fraction_asian","fraction_latino","fraction_white","fraction_native","fraction_black_sent_prison","fraction_asian_sent_prison","fraction_latino_sent_prison","fraction_white_sent_prison", "fraction_native_sent_prison")]
+
+
+```
+
+
+bulk of data is zero.  use zero inflated poisson.
+6% of people convicted are actually innocent so i will model that likelihood by creating a randomized list of 0 and 1s with 6% 1's and 94% zeroes.
+
+i rescaled the county population by dividing by 1000 so that the orders of magnitudes of the variables would be closer and the ZIP model would run.
+
+ZIP
+```{r zip, echo=TRUE,message=FALSE,warning=FALSE,cache=TRUE}
+set.seed(100)
+probs <- rbinom(nrow(police_exon_crime_rates_vwp_vars_scaled), 1, .06)
+
+test<-police_exon_crime_rates_vwp_vars_scaled[,c("num_convicted","num_crime_percent","num_killed_percent","county_population","unemployment_rate","small/mid","suburban", "urban","East South Central","Middle Atlantic","Mountain","New England","Pacific","South Atlantic","West North Central","West South Central")]
+
+#,"unemployment_rate","East South Central","Middle Atlantic","Mountain","New England","Pacific","South Atlantic","West North Central","West South Central", "small/mid","suburban", "urban", "fraction_black", "fraction_asian","fraction_latino","fraction_white","fraction_native","fraction_black_sent_prison","fraction_asian_sent_prison","fraction_latino_sent_prison","fraction_white_sent_prison", "fraction_native_sent_prison"
+
+zip_vwp <- zeroinfl(num_convicted ~.|probs, data=test)
+summary(zip_vwp)
+sqrt(mean((zip_vwp$residuals^2)))
+AIC(zip_vwp)
+
+zip_vwp_no_pop <- zeroinfl(num_convicted ~num_crime_percent+num_killed_percent|probs, data=police_exon_crime_rates_vwp_vars_scaled)
+summary(zip_vwp_no_pop)
+sqrt(mean((zip_vwp_no_pop$residuals^2)))
+AIC(zip_vwp_no_pop)
+
+#zip_vwp_log <- zeroinfl(num_convicted ~.|probs, data=police_exon_crime_rates_vwp_log_scaled)
+#summary(zip_vwp_log)
+#sqrt(mean((zip_vwp_log$residuals^2)))
+#AIC(zip_vwp_log)
+
+#probs_fe <- rbinom(nrow(police_exon_crime_rates_fe_vars_scaled), 1, .06)
+#zip_fe <- zeroinfl(num_convicted ~.|probs_fe, #data=police_exon_crime_rates_fe_vars_scaled)
+#summary(zip_fe)
+#sqrt(mean((zip_fe$residuals^2)))
+#AIC(zip_fe)
+```
+lowest AIC is best model. - indicating that is the best of these models.
+rmse=0.41
+
+Hurdle model - used for count data with large number of zeroes
+"By default the zero-count process is "binomial" (ie, binary logistic regression) and the positive-count process is "poisson"." https://data.library.virginia.edu/getting-started-with-hurdle-models/ 
+```{r hurdle, cache=TRUE}
+hurdle_vwp <- hurdle(num_convicted ~ ., data = police_exon_crime_rates_vwp_vars_scaled, dist = "poisson", zero.dist = "binomial")
+summary(hurdle_vwp)
+AIC(hurdle_vwp)
+
+hurdle_vwp <- hurdle(num_convicted ~ ., data = police_exon_crime_rates_vwp_vars_scaled, dist = "negbin", zero.dist = "binomial")
+summary(hurdle_vwp)
+AIC(hurdle_vwp)
+
+
+#mod.hurdle.nb2 <- hurdle(visits ~ . | gender + insurance, data = nmes, dist = "negbin")
+
+
+hurdle_fe <- hurdle(num_convicted ~ ., data = police_exon_crime_rates_fe_vars_scaled, dist = "poisson", zero.dist = "binomial")
+summary(hurdle_fe)
+AIC(hurdle_fe)
+```
+lower AIC is better
+
+
+partial least squares regression
+```{r pls, echo=TRUE, warning=FALSE, message=FALSE, cache=TRUE}
+#library(pls)
+set.seed(100)
+
+ctrl <- trainControl(method="cv", number=10)
+plsTune <- train(police_exon_crime_rates_vwp[,c("num_crime_percent","num_killed_percent")],police_exon_crime_rates_vwp$num_convicted_percent,
+                 method="pls",
+                 tuneLength=20,
+                 trControl=ctrl,
+                 preProc=c("center","scale"))
+
+plsTune$bestTune
+plsTune$results
+summary(plsTune)
+
+plsTune_log <- train(police_exon_crime_rates_vwp_log[,c("log_crime","log_killed")],police_exon_crime_rates_vwp_log$log_exon,
+                 method="pls",
+                 tuneLength=20,
+                 trControl=ctrl,
+                 preProc=c("center","scale"))
+
+plsTune$bestTune
+plsTune$results
+summary(plsTune)
+
+```
+
+
+- random forest
+
+```{r random-forest, warning=FALSE,message=FALSE}
+set.seed(200)
+
+rf_vwp <- randomForest(x = police_exon_crime_rates_vwp[,c("num_crime_percent","num_killed_percent","unemployment_rate","East South Central","Middle Atlantic","Mountain","New England","Pacific","South Atlantic","West North Central","West South Central", "small/mid","suburban", "urban", "fraction_black", "fraction_asian","fraction_latino","fraction_white","fraction_native","fraction_black_sent_prison","fraction_asian_sent_prison","fraction_latino_sent_prison","fraction_white_sent_prison", "fraction_native_sent_prison","ratio_asian_sentprison__to_pop","ratio_black_sentprison__to_pop","ratio_white_sentprison__to_pop","ratio_latino_sentprison__to_pop","ratio_native_sentprison__to_pop")],
+
+                   y = police_exon_crime_rates_vwp$num_convicted_percent, 
+                       
+                   importance=TRUE,
+                       
+                   ntree=100)
+
+mean(sqrt(rf_vwp$mse))
+mean(rf_vwp$rsq)
+
+rf_fe <- randomForest(x = police_exon[,c("num_crime_percent","num_killed_percent","unemployment_rate","East South Central","Middle Atlantic","Mountain","New England","Pacific","South Atlantic","West North Central","West South Central", "small/mid","suburban", "urban", "fraction_black", "fraction_asian","fraction_latino","fraction_white","fraction_native","fraction_black_sent_prison","fraction_asian_sent_prison","fraction_latino_sent_prison","fraction_white_sent_prison", "fraction_native_sent_prison","ratio_asian_sentprison__to_pop","ratio_black_sentprison__to_pop","ratio_white_sentprison__to_pop","ratio_latino_sentprison__to_pop","ratio_native_sentprison__to_pop")],
+
+                   y = police_exon$num_convicted_percent, 
+                       
+                   importance=TRUE,
+                       
+                   ntree=100)
+
+mean(sqrt(rf_fe$mse))
+mean(rf_fe$rsq)
+#rf_fe$importance
+rfImp_fe <- as.data.frame(varImp(rf_fe, scale=FALSE))
+imp <- data.frame(overall = rfImp_fe$Overall,
+           names   = rownames(rfImp_fe))
+imp[order(imp$overall,decreasing = T),]
+varImpPlot(rf_fe, sort=TRUE,type=2, n.var=10, main=deparse(substitute(Importance))) 
+```
+
+plot best tree from random forest
+```{r plot-tree, echo=TRUE, warning=FALSE, message=FALSE}
+
+best_tree <- which.min(rf_fe$mse)
+tree <- randomForest::getTree(rf_fe, 
+                                k =best_tree, 
+                                labelVar = TRUE) %>%
+                              tibble::rownames_to_column() %>%
+    # make leaf split points to NA, so the 0s won't get plotted
+                             mutate(`split point` = ifelse(is.na(prediction), `split point`, NA))
+  
+  # prepare data frame for graph
+graph_frame <- data.frame(from = rep(tree$rowname, 2),
+                            to = c(tree$`left daughter`, tree$`right daughter`))
+  
+  # convert to graph and delete the last node that we don't want to plot
+graph <- graph_from_data_frame(graph_frame) %>%
+    delete_vertices("0")
+  
+  # set node labels
+V(graph)$node_label <- gsub("_", " ", as.character(tree$`split var`))
+V(graph)$leaf_label <- as.character(tree$prediction)
+V(graph)$split <- as.character(round(tree$`split point`, digits = 2))
+
+  # plot
+plot <- ggraph(graph, 'dendrogram') + 
+    theme_bw() +
+    geom_edge_link() +
+    geom_node_point() +
+    geom_node_text(aes(label = node_label), na.rm = TRUE, repel = TRUE) +
+#    geom_node_label(aes(label = split), vjust = 2.5, na.rm = TRUE, fill = "white") +
+#    geom_node_label(aes(label = leaf_label, fill = leaf_label), na.rm = TRUE, 
+#					repel = TRUE, colour = "white", fontface = "bold", show.legend = FALSE) +
+    theme(panel.grid.minor = element_blank(),
+          panel.grid.major = element_blank(),
+          panel.background = element_blank(),
+          plot.background = element_rect(fill = "white"),
+          panel.border = element_blank(),
+          axis.line = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          plot.title = element_text(size = 18))
+  
+print(plot)
+#code from https://shiring.github.io/machine_learning/2017/03/16/rf_plot_ggraph 
+```
+
+doesn't work...
+```{r}
+as.tree <- function(gTree,rforest,max.depth=3){
+
+  if(is.numeric(gTree[,'split var'])) stop("labelVar=T required")
+
+  bl <- matrix("", nrow=nrow(gTree), ncol=3)
+
+  for(row in 1:nrow(gTree)){
+
+    if(row==1){
+
+      bl[row, 1:2] <- c('10','11')
+
+      next
+
+    }
+
+    if(gTree[row,1]>0){
+
+      bl[row,1:2] <- paste0(bl[which(gTree[,1:2]==row,arr.ind=T)], c('0','1'))
+
+    } else {
+
+      bl[row,3] <- bl[which(gTree[,1:2]==row, arr.ind=T)]
+
+    }
+
+  }
+
+  bl <- data.frame(bl, stringsAsFactors=F); names(bl) <- c('left','right','terminal')
+
+  fr <- list()
+
+  fr$var <- as.character(gTree[,"split var"])
+
+  fr$var[is.na(fr$var)] <- '<leaf>'
+
+  fr$n <- fr$dev <- rep(0,length(fr$var))
+
+  fr$yval <- gTree[,'prediction']
+
+  
+
+  # Need to work out split points based on classes of the splitting vars
+
+  classes <- attributes(rforest$terms)$dataClasses
+
+  blah <- data.frame(var=fr$var, splits=as.character(gTree[,'split point']), 
+
+                classes=classes[fr$var], stringsAsFactors=F)
+
+  index <- which(blah$classes=='factor' & !is.na(blah$classes))
+
+  blah$splits[index] <- sapply(blah$splits[index], factor.repr)  
+
+  
+
+  
+
+  splits <- cbind(
+
+    cutleft=paste0(ifelse(blah$classes=='factor' & !is.na(blah$classes),': ','<'),
+
+                   blah$splits), 
+
+    cutright=paste0(ifelse(blah$classes=='factor' & !is.na(blah$classes),
+
+                           ': ','>'),
+
+                           blah$splits))
+
+  splits[fr$var=='<leaf>',] <- ""
+
+  
+
+  fr <- as.data.frame(fr, stringsAsFactors=F)
+
+  fr$splits <- splits
+
+  x <- ifelse(fr$var=='<leaf>', bl[,3], gsub('.{1}$', '', bl[,1]))
+
+  if(rforest$type=='classification'){
+
+    fr$yprob = matrix(1/length(rforest$classes),nrow=nrow(fr), ncol=length(rforest$classes))
+
+  }
+
+  row.names(fr) <- strtoi(x,2)
+
+  fr <- fr[order(x),]
+
+  
+
+  newtr <- list()
+
+  newtr$frame=fr
+
+  attr(newtr,'xlevels') <- rforest$forest$xlevels
+
+  if(rforest$type=='classification') attr(newtr,'ylevels') <- rforest$classes
+
+  class(newtr) <- 'tree'
+
+  return(newtr)
+
+}
+
+library(party)
+library(partykit)
+tree <- getTree(rf_fe, k=best_tree, labelVar=T)
+
+x <- as.tree(tree, rf_fe)
+
+
+#if(depth>0){
+
+ #   x <- snip.depth(x,depth)
+
+  #}
+
+plot(x, type='uniform')
+
+text(x,split=FALSE,...)
+
+labelBG(x)
+
+labelYN(x)
+
+title(main=main)
+
+
+```
+
+
+turn into lists to use xgboost
+```{r}
+
+police_exon_crime_rates_vwp_list <- list('y' = police_exon_crime_rates_vwp$num_convicted_percent, 'x'=police_exon_crime_rates_vwp[,c("num_crime_percent","num_killed_percent","unemployment_rate","East South Central","Middle Atlantic","Mountain","New England","Pacific","South Atlantic","West North Central","West South Central", "small/mid","suburban", "urban", "fraction_black", "fraction_asian","fraction_latino","fraction_white","fraction_native","fraction_black_sent_prison","fraction_asian_sent_prison","fraction_latino_sent_prison","fraction_white_sent_prison", "fraction_native_sent_prison")])
+
+
+```
+
+-xgboost
+```{r xgboost, warning=FALSE,message=FALSE}
+set.seed(200)
+
+grid <- expand.grid(nrounds = 2500,
+
+                    max_depth = 6,
+
+                    eta = 0.03,
+
+                    gamma = 0,
+
+                    colsample_bytree = 1,
+
+                    min_child_weight = 1,
+
+                    subsample = 0.5)
+
+
+
+control <- trainControl(method='cv',
+
+                        number=10,
+
+                        allowParallel = TRUE)
+
+v_vals <- police_exon_crime_rates_vwp[,c("num_crime_percent","num_killed_percent")]
+xgb <- train(x = police_exon_crime_rates_vwp_list$x,
+
+            y = police_exon_crime_rates_vwp_list$y, 
+                       
+            method = 'xgbTree',
+
+             tuneGrid = grid,
+
+             metric = 'RMSE',
+
+             trControl = control)
+
+xgb$results
+
+#xgb_log <- train(x = police_exon_crime_rates_vwp_log[,c("log_crime","log_killed")],
+
+ #           y = police_exon_crime_rates_vwp_log$log_exon, 
+                       
+  #          method = 'xgbTree',
+
+   #          tuneGrid = grid,
+
+    #         metric = 'RMSE',
+
+     #        trControl = control)
+
+#xgb_log$results
+```
+
+
+
+
+
+- piecewise function
+```{r piecewise, warning=FALSE,message=FALSE}
+pieceswise <- segmented(o, seg.Z, psi, control = seg.control(), model = TRUE, ...)
+
+
+o<-glm(y~z,family=poisson) 
+o.seg<-segmented(o,seg.Z=~z,psi=.5)
+
+```
